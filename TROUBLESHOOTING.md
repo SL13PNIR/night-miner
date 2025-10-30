@@ -22,19 +22,19 @@ Common issues and their solutions.
 - Or install Visual Studio Community with "Desktop development with C++"
 - Restart terminal after installation
 
-### "failed to load source for dependency `ashmaize`"
+### "failed to fetch dependency `ashmaize`"
 
-**Problem**: AshMaize library not found in expected location
+**Problem**: Cannot fetch AshMaize library from GitHub
 
 **Solution**:
-1. Verify directory structure:
+1. Check your internet connection
+2. Verify you can access GitHub: https://github.com/input-output-hk/ce-ashmaize
+3. Try updating: `cargo update`
+4. Clear cargo cache if needed: `cargo clean`
+5. Check Cargo.toml has correct dependency:
+   ```toml
+   ashmaize = { git = "https://github.com/input-output-hk/ce-ashmaize", branch = "master" }
    ```
-   your-project-dir/
-   ├── ce-ashmaize-master/
-   └── night-miner/
-   ```
-2. Check path in `Cargo.toml`: `ashmaize = { path = "../ce-ashmaize-master" }`
-3. Adjust if your structure is different
 
 ### "error: could not compile `night-miner`"
 
@@ -407,13 +407,9 @@ cargo test --release -- --nocapture
 
 1. Try the example configuration files as-is
 2. Test without custom config (uses defaults)
-3. Verify ashmaize library is working:
-   ```powershell
-   cd ..\ce-ashmaize-master
-   cargo test
-   ```
-4. Check Midnight Network documentation
-5. Verify API is accessible in browser
+3. Check Midnight Network documentation
+4. Verify API is accessible in browser: https://scavenger.prod.gd.midnighttge.io/challenge
+5. Review the official AshMaize repository: https://github.com/input-output-hk/ce-ashmaize
 
 ## Emergency Fixes
 
