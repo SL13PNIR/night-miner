@@ -301,7 +301,7 @@ This checks that all bits set in the hash are also set in the difficulty target 
 
 ## Contributing
 
-Found a bug or have a suggestion? Please open an issue on GitHub or submit a pull request.
+Since the scavenger mine phase is only 30 days long, I do not intend to provide support or fixes.
 
 ## License
 
