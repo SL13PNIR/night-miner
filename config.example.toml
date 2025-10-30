@@ -1,0 +1,19 @@
+# NIGHT Token Miner Configuration
+
+# Number of mining threads to use
+# Omit or set to null to use all available CPU cores
+# threads = 8
+
+# Timeout for each challenge in minutes (max 60)
+# Leave some buffer time for solution submission
+challenge_timeout_minutes = 55
+
+# Path to wallet configuration file
+wallet_config_path = "wallet.json"
+
+# Show progress bar during mining
+show_progress = true
+
+# Log level: trace, debug, info, warn, error
+# Use "debug" for troubleshooting, "info" for normal operation
+log_level = "info"
