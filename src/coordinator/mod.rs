@@ -155,18 +155,41 @@ impl MiningCoordinator {
                     MiningResult::Solution(nonce) => {
                         self.stats.solutions_found += 1;
 
-                        // Submit the solution - lowercase per API spec
+                        // Submit the solution with retry logic - lowercase per API spec
                         let nonce_hex = format!("{:016x}", nonce);
-                        match self
-                            .client
-                            .submit_solution(
-                                self.wallet.get_address(),
-                                &challenge.challenge_id,
-                                &nonce_hex,
-                            )
-                            .await
-                        {
-                            Ok(response) => {
+                        let mut submit_result = None;
+                        
+                        // Try up to 3 times with exponential backoff
+                        for attempt in 1..=3 {
+                            match self
+                                .client
+                                .submit_solution(
+                                    self.wallet.get_address(),
+                                    &challenge.challenge_id,
+                                    &nonce_hex,
+                                )
+                                .await
+                            {
+                                Ok(response) => {
+                                    submit_result = Some(Ok(response));
+                                    break;
+                                }
+                                Err(e) => {
+                                    if attempt < 3 {
+                                        warn!(
+                                            "Solution submission attempt {} failed: {:#}. Retrying...",
+                                            attempt, e
+                                        );
+                                        sleep(Duration::from_secs(5 * attempt)).await;
+                                    } else {
+                                        submit_result = Some(Err(e));
+                                    }
+                                }
+                            }
+                        }
+
+                        match submit_result {
+                            Some(Ok(response)) => {
                                 info!(
                                     "Solution submitted successfully! Receipt timestamp: {}",
                                     response.crypto_receipt.timestamp
@@ -185,8 +208,11 @@ impl MiningCoordinator {
                                     }
                                 }
                             }
-                            Err(e) => {
-                                error!("Failed to submit solution: {:#}", e);
+                            Some(Err(e)) => {
+                                error!("Failed to submit solution after 3 attempts: {:#}", e);
+                            }
+                            None => {
+                                error!("Failed to submit solution: no result");
                             }
                         }
                     }
@@ -198,14 +224,10 @@ impl MiningCoordinator {
                     }
                 }
 
-                // Wait until next challenge
+                // Wait until next challenge with countdown and stats
                 let wait_time = calculate_wait_time(next_challenge_starts_at);
                 if wait_time.as_secs() > 0 {
-                    info!(
-                        "Waiting {} seconds until next challenge...",
-                        wait_time.as_secs()
-                    );
-                    sleep(wait_time).await;
+                    self.wait_with_countdown_and_stats(wait_time).await;
                 }
 
                 return Ok(true);
@@ -217,6 +239,48 @@ impl MiningCoordinator {
     #[allow(dead_code)]
     pub fn get_stats(&self) -> &MiningStats {
         &self.stats
+    }
+
+    /// Wait with a countdown timer and display current stats
+    async fn wait_with_countdown_and_stats(&self, total_wait: Duration) {
+        use std::io::{self, Write};
+
+        let total_secs = total_wait.as_secs();
+        let mut remaining = total_secs;
+
+        while remaining > 0 {
+            // Calculate time formatting
+            let hours = remaining / 3600;
+            let minutes = (remaining % 3600) / 60;
+            let seconds = remaining % 60;
+
+            // Calculate success rate
+            let success_rate = if self.stats.challenges_attempted > 0 {
+                (self.stats.solutions_found as f64 / self.stats.challenges_attempted as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            // Print countdown and stats on same line (carriage return to overwrite)
+            print!(
+                "\r⏳ Next challenge in {:02}:{:02}:{:02} | Challenges: {} | Solutions: {} | Success: {:.1}% | STAR: {} ({:.6} NIGHT)   ",
+                hours,
+                minutes,
+                seconds,
+                self.stats.challenges_attempted,
+                self.stats.solutions_found,
+                success_rate,
+                self.stats.total_star_earned,
+                self.stats.total_star_earned as f64 / 1_000_000.0
+            );
+            io::stdout().flush().unwrap();
+
+            sleep(Duration::from_secs(1)).await;
+            remaining -= 1;
+        }
+
+        // Print newline after countdown completes
+        println!();
     }
 }
 

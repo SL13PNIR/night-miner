@@ -16,7 +16,7 @@ impl ScavengerClient {
     /// Create a new API client
     pub fn new() -> Result<Self> {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(60))
             .user_agent("night-miner/1.0")
             .build()
             .context("Failed to create HTTP client")?;

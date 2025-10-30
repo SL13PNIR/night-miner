@@ -16,7 +16,7 @@ night-miner/
 │   │   ├── models.rs        # Data structures for API responses
 │   │   └── client.rs        # HTTP client for Scavenger Mine API
 │   ├── wallet/
-│   │   └── mod.rs           # Wallet configuration and CIP-8/30 signing
+│   │   └── mod.rs           # Wallet configuration (requires external signing)
 │   ├── miner/
 │   │   ├── mod.rs           # Mining module exports
 │   │   └── engine.rs        # Multi-threaded AshMaize mining engine
@@ -24,7 +24,7 @@ night-miner/
 │       └── mod.rs           # Mining coordinator (orchestration)
 ├── Cargo.toml               # Rust dependencies and build config
 ├── README.md                # Comprehensive documentation
-├── QUICKSTART.md            # Quick start guide
+├── TROUBLESHOOTING.md       # Troubleshooting guide
 ├── ARCHITECTURE.md          # This file
 ├── config.example.toml      # Example configuration
 ├── wallet.example.json      # Example wallet configuration
@@ -169,10 +169,11 @@ The mining process implements the specification exactly:
 
 4. **Difficulty Check**:
    ```rust
-   (hash[0..4] & !difficulty_mask) == 0
+   (hash_value | target) == target
    ```
-   - Compares first 4 bytes
-   - All zero bits in mask must be zero in hash
+   - Compares first 4 bytes of hash as u32 (big-endian)
+   - Checks that all bits in hash are a subset of bits in target
+   - Matches the website's exact implementation
 
 ### Thread Partitioning
 
@@ -333,17 +334,6 @@ Real-time progress bar shows:
 - Current hash rate
 - Status messages
 
-## Future Enhancements
-
-Possible improvements (not currently implemented):
-
-1. **GPU Support**: CUDA/OpenCL for massive parallelism
-2. **Distributed Mining**: Multiple machines, coordinated
-3. **Dynamic Difficulty Adjustment**: Adapt thread count
-4. **Web Dashboard**: Real-time stats in browser
-5. **Automatic Wallet Integration**: Direct signing without external tools
-6. **Pool Mining**: Collaborative mining with reward sharing
-
 ## Performance Characteristics
 
 ### Expected Hash Rates
@@ -377,21 +367,7 @@ Difficulty varies per challenge. Time to solution:
 
 ## Troubleshooting
 
-See README.md for common issues and solutions.
-
-## Contributing
-
-This is a standalone miner for the NIGHT token Scavenger Mine program. 
-
-Improvements welcome:
-- Performance optimizations
-- Bug fixes
-- Documentation improvements
-- Platform-specific enhancements
-
-## License
-
-See README.md for license information.
+See TROUBLESHOOTING.md for common issues and solutions.
 
 ## Acknowledgments
 
