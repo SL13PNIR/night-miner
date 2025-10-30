@@ -301,6 +301,11 @@ A solution is valid when:
 
 This checks that all bits set in the hash are also set in the difficulty target (hash is a subset of target bits).
 
+## References
+
+- **Midnight Scavenger Mine API Reference** (October 2025 / Version 1.0)  
+  [https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20-%20Whitepaper%20treatment%20for%20Scavenger%20Mine%20API%20V3.pdf](https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20-%20Whitepaper%20treatment%20for%20Scavenger%20Mine%20API%20V3.pdf)
+
 ## Contributing
 
 Since the scavenger mine phase is only 30 days long, I do not intend to provide support or fixes.
