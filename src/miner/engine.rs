@@ -58,11 +58,15 @@ impl MiningEngine {
     pub fn initialize_rom(&mut self, no_pre_mine: &str) -> Result<()> {
         info!("Initializing ROM with no_pre_mine: {}", no_pre_mine);
 
-        let seed = hex::decode(no_pre_mine).context("Failed to decode no_pre_mine hex")?;
+        // CRITICAL: Use the hex string bytes directly as the key, NOT decoded bytes!
+        // The website does: builder.key(new TextEncoder().encode(no_pre_mine))
+        // which encodes the HEX STRING ITSELF (e.g., "d201ad52...") as UTF-8 bytes
+        // NOT the decoded binary representation!
+        let seed = no_pre_mine.as_bytes();
 
         let start = Instant::now();
         self.rom = Arc::new(Rom::new(
-            &seed,
+            seed,
             RomGenerationType::TwoStep {
                 pre_size: ASHMAIZE_PRE_SIZE,
                 mixing_numbers: ASHMAIZE_MIXING_NUMBERS,
@@ -255,19 +259,19 @@ fn mine_worker(
 ) {
     debug!("Worker thread {} started", thread_id);
 
-    // Each thread gets a unique starting nonce based on thread_id + some randomness
+    // Each thread starts at random position and increments
     use std::time::{SystemTime, UNIX_EPOCH};
     let random_offset = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
     let nonce_start = ((thread_id as u64) << 56) | (random_offset & 0x00FFFFFFFFFFFFFF);
-    let nonce_step = 1u64;
-
+    
     let mut nonce = nonce_start;
     let mut local_hash_count = 0u64;
 
     while !found.load(Ordering::Relaxed) {
+        
         // Construct preimage
         let preimage = construct_preimage(nonce, address, challenge);
 
@@ -278,39 +282,11 @@ fn mine_worker(
 
         // Check if hash meets difficulty
         if check_difficulty(&hash_result, &difficulty_mask) {
-            // Found a solution!
             debug!(
-                "Thread {} found solution! Nonce: {:016x}, Hash: {:02x}{:02x}{:02x}{:02x}..., Target: {:02x}{:02x}{:02x}{:02x}",
-                thread_id, nonce,
-                hash_result[0], hash_result[1], hash_result[2], hash_result[3],
-                difficulty_mask[0], difficulty_mask[1], difficulty_mask[2], difficulty_mask[3]
+                "Thread {} found solution! Nonce: {:016x}",
+                thread_id, nonce
             );
-            // Debug the actual check
-            for i in 0..4 {
-                let check_val = hash_result[i] & !difficulty_mask[i];
-                debug!(
-                    "  Byte {}: hash={:02x} & !mask={:02x} = {:02x} ({})",
-                    i,
-                    hash_result[i],
-                    difficulty_mask[i],
-                    check_val,
-                    if check_val == 0 { "OK" } else { "FAIL" }
-                );
-            }
-            debug!("Full hash: {}", hex::encode(&hash_result));
-            debug!(
-                "Preimage ({} bytes): {}",
-                preimage.len(),
-                if preimage.len() <= 500 {
-                    hex::encode(&preimage)
-                } else {
-                    format!(
-                        "{}... ({} bytes)",
-                        hex::encode(&preimage[..100]),
-                        preimage.len()
-                    )
-                }
-            );
+            
             found.store(true, Ordering::Relaxed);
             solution_nonce.store(nonce, Ordering::Relaxed);
             let _ = tx.send(nonce);
@@ -322,8 +298,8 @@ fn mine_worker(
             hash_count.fetch_add(1000, Ordering::Relaxed);
             local_hash_count = 0;
         }
-
-        nonce = nonce.wrapping_add(nonce_step);
+        
+        nonce = nonce.wrapping_add(1);
     }
 
     // Update final hash count

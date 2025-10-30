@@ -4,7 +4,7 @@ use tracing::{debug, info};
 
 use super::models::*;
 
-const BASE_URL: &str = "https://scavenger.prod.gd.midnighttge.io";
+const BASE_URL: &str = "https://sm.midnight.gd/api";
 
 /// API client for the Scavenger Mine service
 pub struct ScavengerClient {
@@ -211,6 +211,27 @@ impl ScavengerClient {
         } else {
             let error_text = response.text().await?;
             anyhow::bail!("Failed to fetch star rates: {}", error_text);
+        }
+    }
+
+    /// GET /statistics/{address} - Get statistics for an address
+    pub async fn get_statistics(&self, address: &str) -> Result<StatisticsResponse> {
+        let url = format!("{}/statistics/{}", self.base_url, address);
+
+        debug!("Fetching statistics for address: {}", address);
+
+        let response = self.client.get(&url).send().await?;
+
+        if response.status().is_success() {
+            let stats = response.json::<StatisticsResponse>().await?;
+            debug!(
+                "Address has {} crypto receipts, {} STAR allocation",
+                stats.local.crypto_receipts, stats.local.night_allocation
+            );
+            Ok(stats)
+        } else {
+            let error_text = response.text().await?;
+            anyhow::bail!("Failed to fetch statistics: {}", error_text);
         }
     }
 }
