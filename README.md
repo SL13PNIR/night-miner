@@ -1,3 +1,5 @@
+**⚠️ Notice**: This repository is provided as-is for informational purposes during the 30-day NIGHT Token Scavenger Mine event. Issues and pull requests are disabled. No support or updates will be provided. Use at your own risk.
+
 # NIGHT Token Miner
 
 High-performance Rust miner for the NIGHT Token Scavenger Mine program.
