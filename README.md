@@ -263,7 +263,6 @@ night-miner/
 │   ├── miner/               # Mining engine & AshMaize hashing
 │   ├── coordinator/         # Mining session management
 │   └── wallet/              # Wallet configuration
-├── examples/                # Test and verification tools
 ├── Cargo.toml              # Rust dependencies
 ├── wallet.json             # Your wallet configuration
 └── README.md               # This file
