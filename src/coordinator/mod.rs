@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
@@ -46,6 +47,7 @@ pub struct MiningCoordinator {
     mining_engine: MiningEngine,
     stats: MiningStats,
     challenge_timeout: Duration,
+    submitted_challenges: HashSet<String>,
 }
 
 impl MiningCoordinator {
@@ -65,6 +67,7 @@ impl MiningCoordinator {
             mining_engine,
             stats: MiningStats::default(),
             challenge_timeout,
+            submitted_challenges: HashSet::new(),
         })
     }
 
@@ -128,6 +131,38 @@ impl MiningCoordinator {
                     "Day {}/{} - Challenge {} - Difficulty: {} ({})",
                     current_day, max_day, challenge.challenge_id, challenge.difficulty, difficulty_level
                 );
+
+                // Check if we already submitted a solution for this challenge (local tracking)
+                if self.submitted_challenges.contains(&challenge.challenge_id) {
+                    info!(
+                        "Already submitted solution for challenge {}. Waiting for next challenge...",
+                        challenge.challenge_id
+                    );
+                    let wait_time = calculate_wait_time(next_challenge_starts_at);
+                    if wait_time.as_secs() > 0 {
+                        self.wait_with_countdown_and_stats(wait_time).await;
+                    }
+                    return Ok(true);
+                }
+                
+                // Check server statistics to see if we already have this solution
+                // (e.g., from a previous run or another miner instance)
+                if let Ok(stats) = self.client.get_statistics(self.wallet.get_address()).await {
+                    // If we have crypto_receipts >= challenge_number for day 1, we likely already submitted this
+                    // This is a heuristic check - challenges are issued sequentially
+                    if current_day == 1 && stats.local.crypto_receipts >= challenge.challenge_number {
+                        info!(
+                            "Server shows {} crypto receipts, likely already have solution for challenge {} (#{}).Skipping...",
+                            stats.local.crypto_receipts, challenge.challenge_id, challenge.challenge_number
+                        );
+                        self.submitted_challenges.insert(challenge.challenge_id.clone());
+                        let wait_time = calculate_wait_time(next_challenge_starts_at);
+                        if wait_time.as_secs() > 0 {
+                            self.wait_with_countdown_and_stats(wait_time).await;
+                        }
+                        return Ok(true);
+                    }
+                }
 
                 // Debug: Print full challenge details
                 debug!("Challenge details:");
@@ -195,6 +230,9 @@ impl MiningCoordinator {
                                     response.crypto_receipt.timestamp
                                 );
                                 self.stats.solutions_submitted += 1;
+                                
+                                // Mark this challenge as submitted so we don't re-mine it
+                                self.submitted_challenges.insert(challenge.challenge_id.clone());
 
                                 // Try to fetch star rates to estimate earnings
                                 if let Ok(star_rates) = self.client.get_work_to_star_rate().await {
@@ -209,7 +247,15 @@ impl MiningCoordinator {
                                 }
                             }
                             Some(Err(e)) => {
-                                error!("Failed to submit solution after 3 attempts: {:#}", e);
+                                let error_msg = format!("{:#}", e);
+                                
+                                // If solution already exists, mark as submitted to avoid re-mining
+                                if error_msg.contains("Solution already exists") {
+                                    info!("Solution already exists for challenge {}. Skipping re-mining.", challenge.challenge_id);
+                                    self.submitted_challenges.insert(challenge.challenge_id.clone());
+                                } else {
+                                    error!("Failed to submit solution after 3 attempts: {}", error_msg);
+                                }
                             }
                             None => {
                                 error!("Failed to submit solution: no result");
@@ -263,7 +309,7 @@ impl MiningCoordinator {
 
             // Print countdown and stats on same line (carriage return to overwrite)
             print!(
-                "\r⏳ Next challenge in {:02}:{:02}:{:02} | Challenges: {} | Solutions: {} | Success: {:.1}% | STAR: {} ({:.6} NIGHT)   ",
+                "\r⏳ {:02}:{:02}:{:02} | Ch: {} | Sol: {} | {:.1}% | STAR: {} ({:.6} NIGHT)                    ",
                 hours,
                 minutes,
                 seconds,

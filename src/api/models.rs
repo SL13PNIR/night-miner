@@ -96,6 +96,28 @@ pub struct DonationResponse {
 /// Response from GET /work_to_star_rate endpoint
 pub type WorkToStarRate = Vec<u64>;
 
+/// Response from GET /statistics/{address} endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatisticsResponse {
+    pub global: GlobalStatistics,
+    pub local: LocalStatistics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalStatistics {
+    pub wallets: u64,
+    pub challenges: u32,
+    pub total_challenges: u32,
+    pub total_crypto_receipts: u64,
+    pub recent_crypto_receipts: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalStatistics {
+    pub crypto_receipts: u32,
+    pub night_allocation: u64,
+}
+
 /// Error response from API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
