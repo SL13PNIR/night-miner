@@ -256,6 +256,24 @@ Common issues and their solutions.
 4. Retry (miner may auto-retry)
 5. Check for API errors in logs
 
+### "Solution already exists"
+
+**Message**: `Solution validation failed: Solution already exists`
+
+**This is actually GOOD NEWS!** ✅
+
+**What it means**:
+- Your miner found a **valid solution** that meets the difficulty requirements
+- Your difficulty check, preimage construction, and hashing are all working correctly
+- Someone else (or you in a previous run) already submitted this exact solution first
+- Each wallet can only submit **one unique solution per challenge per hour**
+
+**What to do**:
+- **Nothing!** This confirms your miner is working properly
+- The miner will automatically continue mining for the next challenge
+- If you're running multiple instances with the same wallet, only the first to submit will succeed
+- Consider using different wallet addresses for multiple miner instances to maximize chances
+
 ## Performance Issues
 
 ### Slower Than Expected

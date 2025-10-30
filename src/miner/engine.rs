@@ -100,9 +100,10 @@ impl MiningEngine {
         address: &str,
         timeout: Option<Duration>,
     ) -> Result<MiningResult> {
+        let difficulty_level = difficulty_to_level(&challenge.difficulty);
         info!(
-            "Starting mining for challenge {} with difficulty {}",
-            challenge.challenge_id, challenge.difficulty
+            "Starting mining for challenge {} with difficulty {} ({})",
+            challenge.challenge_id, challenge.difficulty, difficulty_level
         );
 
         let difficulty_mask = parse_difficulty(&challenge.difficulty)?;
