@@ -303,8 +303,7 @@ This checks that all bits set in the hash are also set in the difficulty target 
 
 ## References
 
-- **Midnight Scavenger Mine API Reference** (October 2025 / Version 1.0)  
-  [https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20-%20Whitepaper%20treatment%20for%20Scavenger%20Mine%20API%20V3.pdf](https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20-%20Whitepaper%20treatment%20for%20Scavenger%20Mine%20API%20V3.pdf)
+- [**Midnight Scavenger Mine API Reference** (October 2025 / Version 1.0)](https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20-%20Whitepaper%20treatment%20for%20Scavenger%20Mine%20API%20V3.pdf)  Midnight TGE Ltd
 
 ## Contributing
 
