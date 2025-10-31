@@ -43,6 +43,8 @@ bulk-donation-wallet/
 rate-limit-test-wallet/
 new-workflow-test/
 test-bulk-wallet/
+auto-mine-wallet/
+test-shared-wallet/
 
 # Temporary/test files
 decode_sig.rs

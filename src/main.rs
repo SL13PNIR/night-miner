@@ -174,6 +174,25 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "mainnet")]
         network: String,
     },
+
+    /// Automated mining workflow: creates wallet, mines, auto-rotates addresses per solution
+    AutoMine {
+        /// Output directory for wallet files
+        #[arg(short = 'o', long, default_value = "auto-mine-wallet")]
+        output_dir: PathBuf,
+
+        /// Network: mainnet or testnet
+        #[arg(short = 'n', long, default_value = "mainnet")]
+        network: String,
+
+        /// Number of mining threads (defaults to CPU count)
+        #[arg(short, long)]
+        threads: Option<usize>,
+
+        /// Challenge timeout in minutes
+        #[arg(short = 't', long, default_value = "55")]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
@@ -1033,11 +1052,446 @@ async fn main() -> Result<()> {
             }
 
             if total_succeeded == count {
-                println!("\n All addresses created and registered for mining!");
+                println!("\n✅ All addresses created and registered for mining!");
                 println!("   Donation registrations set up (will activate after mining)");
             } else {
-                println!("\n  Some addresses failed to configure. See details above.");
+                println!("\n⚠️  Some addresses failed to configure. See details above.");
             }
+        }
+
+        Commands::AutoMine {
+            output_dir,
+            network,
+            threads,
+            timeout,
+        } => {
+            use std::collections::{HashMap, HashSet};
+            
+            println!("🚀 Automated Mining Workflow");
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("This will:");
+            println!("  1. Create a new wallet with first address");
+            println!("  2. Register the first address");
+            println!("  3. Mine with first address until solution found");
+            println!("  4. Rotate to next existing address (if available)");
+            println!("  5. Create new address only when all have solutions");
+            println!("  6. Restart from first address on new challenge\n");
+
+            // Find cardano-cli
+            let cli_paths = vec![
+                "cardano-cli",
+                "cardano-cli.exe",
+                "./bin/cardano-cli",
+                "./bin/cardano-cli.exe",
+            ];
+            
+            let mut cardano_cli = None;
+            for path in &cli_paths {
+                let check = Command::new(path).arg("--version").output();
+                if let Ok(output) = check {
+                    if output.status.success() {
+                        cardano_cli = Some(path.to_string());
+                        break;
+                    }
+                }
+            }
+            
+            let cardano_cli = cardano_cli.context("cardano-cli not found")?;
+            info!("Using cardano-cli: {}", cardano_cli);
+
+            // Create output directory
+            fs::create_dir_all(&output_dir)?;
+            let wallet_json = output_dir.join("wallet.json");
+            
+            // Define shared stake key paths
+            let shared_stake_vkey = output_dir.join("wallet-stake.vkey");
+            let shared_stake_skey = output_dir.join("wallet-stake.skey");
+            
+            // Load existing wallet or create new one
+            let mut wallet = if wallet_json.exists() {
+                println!("📂 Loading existing wallet from: {}", wallet_json.display());
+                WalletConfig::from_file(&wallet_json)?
+            } else {
+                println!("📝 Creating new wallet");
+                WalletConfig {
+                    addresses: Vec::new(),
+                }
+            };
+            
+            // Create shared stake key if it doesn't exist
+            if !shared_stake_skey.exists() {
+                println!("🔑 Creating shared stake key for wallet...");
+                Command::new(&cardano_cli)
+                    .args(&[
+                        "stake-address", "key-gen",
+                        "--verification-key-file", shared_stake_vkey.to_str().unwrap(),
+                        "--signing-key-file", shared_stake_skey.to_str().unwrap(),
+                    ])
+                    .output()?;
+                println!("   ✅ Shared stake key created");
+            } else {
+                println!("🔑 Using existing shared stake key");
+            }
+            
+            let client = api::ScavengerClient::new()?;
+            let mut address_counter = wallet.addresses.len();
+            
+            // Track which addresses have submitted solutions for the current challenge
+            // Key: challenge_id, Value: set of address indices that have submitted
+            let mut challenge_submissions: HashMap<String, HashSet<usize>> = HashMap::new();
+            let mut current_address_index = 0;
+            
+            // Create and register the first address only if wallet is empty
+            if wallet.addresses.is_empty() {
+                let name = format!("addr-{}", address_counter);
+                println!("\n📝 Creating initial address: {}", name);
+
+                let payment_vkey = output_dir.join(format!("{}.vkey", name));
+                let payment_skey = output_dir.join(format!("{}.skey", name));
+                let payment_addr = output_dir.join(format!("{}.addr", name));
+
+                // Generate payment keys only (reuse shared stake key)
+                Command::new(&cardano_cli)
+                    .args(&[
+                        "address", "key-gen",
+                        "--verification-key-file", payment_vkey.to_str().unwrap(),
+                        "--signing-key-file", payment_skey.to_str().unwrap(),
+                    ])
+                    .output()?;
+
+                // Build address using shared stake key
+                let mut args = vec![
+                    "address", "build",
+                    "--payment-verification-key-file", payment_vkey.to_str().unwrap(),
+                    "--stake-verification-key-file", shared_stake_vkey.to_str().unwrap(),
+                ];
+                
+                if network == "mainnet" {
+                    args.push("--mainnet");
+                } else {
+                    args.push("--testnet-magic");
+                    args.push("1");
+                }
+
+                let addr_output = Command::new(&cardano_cli).args(&args).output()?;
+                let address = String::from_utf8(addr_output.stdout)?.trim().to_string();
+                fs::write(&payment_addr, &address)?;
+
+                // Get public key
+                let vkey_content = fs::read_to_string(&payment_vkey)?;
+                let vkey_json: serde_json::Value = serde_json::from_str(&vkey_content)?;
+                let pubkey_hex = vkey_json["cborHex"]
+                    .as_str()
+                    .context("Failed to extract public key")?
+                    .trim_start_matches("5820")
+                    .to_string();
+
+                // Add to wallet
+                wallet.addresses.push(wallet::AddressEntry {
+                    address: address.clone(),
+                    verification_key: pubkey_hex.clone(),
+                });
+                wallet.to_file(&wallet_json)?;
+
+                println!("   ✅ Created: {}", address);
+
+                // Register the new address
+                println!("🔐 Registering address...");
+                let tandc = client.get_terms_and_conditions(None).await?;
+                let signature = wallet::sign_message_with_key(&tandc.message, &address, &payment_skey)?;
+                
+                match client.register(&address, &signature, &pubkey_hex).await {
+                    Ok(_) => println!("   ✅ Registered successfully"),
+                    Err(e) => anyhow::bail!("Failed to register initial address: {}", e),
+                }
+
+                address_counter += 1;
+            } else {
+                println!("   ✅ Loaded {} existing address(es)", wallet.addresses.len());
+            }
+
+            println!("\n🎯 Starting automated mining loop...\n");
+
+            // Main mining loop
+            let start_time = std::time::Instant::now();
+            let timeout_duration = std::time::Duration::from_secs(timeout * 60);
+            
+            'mining_loop: loop {
+                // Check if we've exceeded the challenge timeout
+                if start_time.elapsed() >= timeout_duration {
+                    println!("\n⏰ Challenge timeout reached. Exiting...");
+                    break 'mining_loop;
+                }
+
+                // Get current challenge
+                let challenge_response = client.get_challenge().await?;
+                
+                match challenge_response.data {
+                    api::ChallengeData::Before { starts_at } => {
+                        println!("⏳ Mining hasn't started yet. Starts at: {}", starts_at);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                        continue 'mining_loop;
+                    }
+                    api::ChallengeData::After => {
+                        println!("\n🏁 Mining period has ended");
+                        break 'mining_loop;
+                    }
+                    api::ChallengeData::Active {
+                        challenge,
+                        next_challenge_starts_at,
+                        current_day,
+                        max_day,
+                        ..
+                    } => {
+                        // If this is a new challenge, reset to first address
+                        let submissions = challenge_submissions.entry(challenge.challenge_id.clone()).or_insert_with(HashSet::new);
+                        
+                        // Check if current address already submitted for this challenge
+                        if submissions.contains(&current_address_index) {
+                            // Move to next address
+                            current_address_index = (current_address_index + 1) % wallet.addresses.len();
+                            
+                            // Check if all addresses have submitted for this challenge
+                            if submissions.len() >= wallet.addresses.len() {
+                                // All addresses used, check if we have time to create a new one
+                                let time_until_next = (next_challenge_starts_at.timestamp() - chrono::Utc::now().timestamp()).max(0);
+                                
+                                if time_until_next > 300 { // At least 5 minutes remaining
+                                    println!("\n🔄 All addresses have solutions. Creating new address...");
+                                    
+                                    // Create and register new address
+                                    let name = format!("addr-{}", address_counter);
+                                    println!("\n📝 Creating address: {}", name);
+
+                                    let payment_vkey = output_dir.join(format!("{}.vkey", name));
+                                    let payment_skey = output_dir.join(format!("{}.skey", name));
+                                    let payment_addr = output_dir.join(format!("{}.addr", name));
+
+                                    // Generate payment keys only (reuse shared stake key)
+                                    Command::new(&cardano_cli)
+                                        .args(&[
+                                            "address", "key-gen",
+                                            "--verification-key-file", payment_vkey.to_str().unwrap(),
+                                            "--signing-key-file", payment_skey.to_str().unwrap(),
+                                        ])
+                                        .output()?;
+
+                                    // Build address using shared stake key
+                                    let mut args = vec![
+                                        "address", "build",
+                                        "--payment-verification-key-file", payment_vkey.to_str().unwrap(),
+                                        "--stake-verification-key-file", shared_stake_vkey.to_str().unwrap(),
+                                    ];
+                                    
+                                    if network == "mainnet" {
+                                        args.push("--mainnet");
+                                    } else {
+                                        args.push("--testnet-magic");
+                                        args.push("1");
+                                    }
+
+                                    let addr_output = Command::new(&cardano_cli).args(&args).output()?;
+                                    let address = String::from_utf8(addr_output.stdout)?.trim().to_string();
+                                    fs::write(&payment_addr, &address)?;
+
+                                    // Get public key
+                                    let vkey_content = fs::read_to_string(&payment_vkey)?;
+                                    let vkey_json: serde_json::Value = serde_json::from_str(&vkey_content)?;
+                                    let pubkey_hex = vkey_json["cborHex"]
+                                        .as_str()
+                                        .context("Failed to extract public key")?
+                                        .trim_start_matches("5820")
+                                        .to_string();
+
+                                    // Add to wallet
+                                    wallet.addresses.push(wallet::AddressEntry {
+                                        address: address.clone(),
+                                        verification_key: pubkey_hex.clone(),
+                                    });
+                                    wallet.to_file(&wallet_json)?;
+
+                                    println!("   ✅ Created: {}", address);
+
+                                    // Register the new address with retry logic
+                                    println!("🔐 Registering address...");
+                                    let tandc = client.get_terms_and_conditions(None).await?;
+                                    let signature = wallet::sign_message_with_key(&tandc.message, &address, &payment_skey)?;
+                                    
+                                    let mut registered = false;
+                                    let mut attempt = 0;
+                                    
+                                    while !registered {
+                                        attempt += 1;
+                                        match client.register(&address, &signature, &pubkey_hex).await {
+                                            Ok(_) => {
+                                                println!("   ✅ Registered successfully");
+                                                current_address_index = address_counter;
+                                                address_counter += 1;
+                                                registered = true;
+                                            }
+                                            Err(e) => {
+                                                let err_msg = e.to_string();
+                                                if err_msg.contains("Too Many Requests") || err_msg.contains("429") {
+                                                    let wait_time = std::cmp::min(10 * attempt, 60); // Cap at 60 seconds
+                                                    println!("   ⏳ Rate limited, waiting {} seconds... (attempt {})", wait_time, attempt);
+                                                    tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                                                } else {
+                                                    // Non-rate-limit error, bail out
+                                                    anyhow::bail!("Registration failed: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    println!("\n⏰ All addresses used, not enough time for new address.");
+                                    println!("   Waiting {} seconds for next challenge...", time_until_next);
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(time_until_next as u64 + 5)).await;
+                                    continue 'mining_loop;
+                                }
+                            } else {
+                                // Skip addresses that already submitted
+                                while submissions.contains(&current_address_index) {
+                                    current_address_index = (current_address_index + 1) % wallet.addresses.len();
+                                }
+                                println!("\n🔄 Switching to address {}", current_address_index);
+                            }
+                        }
+
+                        let current_address = &wallet.addresses[current_address_index].address;
+                        let difficulty_level = miner::difficulty_to_level(&challenge.difficulty);
+                        
+                        println!("\n🎯 Day {}/{} - Challenge {}", current_day, max_day, challenge.challenge_id);
+                        println!("   Difficulty: {} ({})", challenge.difficulty, difficulty_level);
+                        println!("   Mining with address {}: {}", current_address_index, current_address);
+                        println!("   Addresses: {} created, {} used this challenge", wallet.addresses.len(), submissions.len());
+
+                        // Mine for solution
+                        let mut mining_engine = miner::MiningEngine::new(threads).with_progress_bar(true);
+                        
+                        // Initialize ROM with challenge's no_pre_mine value
+                        mining_engine.initialize_rom(&challenge.no_pre_mine)?;
+                        
+                        println!("\n⛏️  Mining...");
+                        let remaining_time = timeout_duration.saturating_sub(start_time.elapsed());
+                        let mining_result = mining_engine.mine(
+                            &challenge,
+                            current_address,
+                            Some(remaining_time),
+                        )?;
+
+                        match mining_result {
+                            miner::MiningResult::Solution(nonce) => {
+                                println!("\n🎉 Solution found!");
+                                println!("   Nonce: {}", nonce);
+
+                                // Submit solution (convert nonce to 16-char hex string without 0x prefix)
+                                let nonce_hex = format!("{:016x}", nonce);
+                                println!("📤 Submitting solution...");
+                                match client.submit_solution(
+                                    current_address,
+                                    &challenge.challenge_id,
+                                    &nonce_hex,
+                                ).await {
+                                    Ok(response) => {
+                                        println!("   ✅ Solution accepted!");
+                                        println!("   Receipt timestamp: {}", response.crypto_receipt.timestamp);
+                                        
+                                        // Mark this address as having submitted for this challenge
+                                        submissions.insert(current_address_index);
+                                        
+                                        println!("   Progress: {}/{} addresses used", submissions.len(), wallet.addresses.len());
+
+                                        // Brief pause before continuing
+                                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                    }
+                                    Err(e) => {
+                                        let err_msg = e.to_string();
+                                        if err_msg.contains("Address is not registered") {
+                                            println!("   ⚠️  Address not registered. Attempting to register now...");
+                                            
+                                            // Try to register this address
+                                            let addr_name = format!("addr-{}", current_address_index);
+                                            let payment_skey = output_dir.join(format!("{}.skey", addr_name));
+                                            
+                                            if payment_skey.exists() {
+                                                let tandc = client.get_terms_and_conditions(None).await?;
+                                                let signature = wallet::sign_message_with_key(&tandc.message, current_address, &payment_skey)?;
+                                                let pubkey = &wallet.addresses[current_address_index].verification_key;
+                                                
+                                                let mut registered = false;
+                                                let mut attempt = 0;
+                                                
+                                                while !registered && attempt < 5 {
+                                                    attempt += 1;
+                                                    match client.register(current_address, &signature, pubkey).await {
+                                                        Ok(_) => {
+                                                            println!("   ✅ Successfully registered address");
+                                                            registered = true;
+                                                            // Retry submission
+                                                            println!("   🔄 Retrying submission...");
+                                                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                                            continue 'mining_loop;
+                                                        }
+                                                        Err(reg_err) => {
+                                                            let reg_err_msg = reg_err.to_string();
+                                                            if reg_err_msg.contains("Too Many Requests") || reg_err_msg.contains("429") {
+                                                                let wait_time = std::cmp::min(10 * attempt, 60);
+                                                                println!("   ⏳ Rate limited, waiting {} seconds... (attempt {})", wait_time, attempt);
+                                                                tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                                                            } else {
+                                                                println!("   ❌ Registration failed: {}", reg_err);
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                if !registered {
+                                                    println!("   ⚠️  Could not register address. Marking as used to skip it.");
+                                                    submissions.insert(current_address_index);
+                                                }
+                                            } else {
+                                                println!("   ⚠️  Signing key not found. Marking address as used to skip it.");
+                                                submissions.insert(current_address_index);
+                                            }
+                                        } else if err_msg.contains("Solution already exists") {
+                                            println!("   ⚠️  Solution was already submitted by someone else");
+                                            println!("   Marking address as used and continuing to next address...");
+                                            submissions.insert(current_address_index);
+                                        } else {
+                                            println!("   ❌ Submission failed: {}", e);
+                                            println!("   Marking address as used and continuing...");
+                                            submissions.insert(current_address_index);
+                                        }
+                                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                    }
+                                }
+                            }
+                            miner::MiningResult::Timeout => {
+                                println!("\n⏰ Mining timeout reached");
+                                break 'mining_loop;
+                            }
+                            miner::MiningResult::Stopped => {
+                                println!("\n⏸️  Mining stopped");
+                                break 'mining_loop;
+                            }
+                        }
+                    }
+                }
+            }
+
+            println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("📊 Automated Mining Complete");
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("📁 Wallet: {}", wallet_json.display());
+            println!("📋 Total addresses created: {}", wallet.addresses.len());
+            
+            let total_solutions: usize = challenge_submissions.values().map(|s| s.len()).sum();
+            println!("✅ Total solutions submitted: {}", total_solutions);
+            println!("📅 Challenges participated: {}", challenge_submissions.len());
+            
+            println!("\n💡 You can continue mining with:");
+            println!("   night-miner --wallet {} mine", wallet_json.display());
         }
     }
 
