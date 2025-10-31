@@ -83,6 +83,33 @@ enum Commands {
         /// CIP-8/30 signature over the donation message
         #[arg(short, long)]
         signature: String,
+
+        /// Specific address to donate from (defaults to primary/first address)
+        #[arg(short = 'a', long)]
+        address: Option<String>,
+    },
+
+    /// Create wallet, register all addresses, and set up donations to destination
+    BulkDonate {
+        /// Destination address to receive all donations (overrides donation-address.json)
+        #[arg(short, long)]
+        destination: Option<String>,
+
+        /// Path to donation-address.json file
+        #[arg(short = 'f', long, default_value = "donation-address.json")]
+        donation_address_file: PathBuf,
+
+        /// Number of addresses to create (including the donor address)
+        #[arg(short = 'n', long, default_value = "1")]
+        count: usize,
+
+        /// Output directory for wallet files
+        #[arg(short = 'o', long, default_value = "bulk-donation-wallet")]
+        output_dir: PathBuf,
+
+        /// Wallet name prefix
+        #[arg(short = 'w', long, default_value = "addr")]
+        wallet_name: String,
     },
 
     /// Generate a sample configuration file
@@ -285,16 +312,28 @@ async fn main() -> Result<()> {
         Commands::Donate {
             destination,
             signature,
+            address,
         } => {
             let wallet_path = cli.wallet.unwrap_or_else(|| PathBuf::from("wallet.json"));
             let wallet = WalletConfig::from_file(wallet_path)?;
 
+            // Determine which address to donate from
+            let original_address = if let Some(addr) = address {
+                // Verify address exists in wallet
+                wallet
+                    .get_pubkey_for_address(&addr)
+                    .context(format!("Address {} not found in wallet", addr))?;
+                addr
+            } else {
+                wallet.get_primary_address().to_string()
+            };
+
             let client = api::ScavengerClient::new()?;
 
-            info!("Donating from {} to {}", wallet.get_primary_address(), destination);
+            info!("Donating from {} to {}", original_address, destination);
 
             let response = client
-                .donate_to(&destination, wallet.get_primary_address(), &signature)
+                .donate_to(&destination, &original_address, &signature)
                 .await?;
 
             info!("Donation successful!");
@@ -724,6 +763,281 @@ async fn main() -> Result<()> {
             println!("   2. Register with signature:");
             println!("      night-miner --wallet {} register --signature \"<signature>\"", 
                      wallet_json.display());
+        }
+
+        Commands::BulkDonate {
+            destination,
+            donation_address_file,
+            count,
+            output_dir,
+            wallet_name,
+        } => {
+            if count < 1 {
+                anyhow::bail!("Count must be at least 1");
+            }
+
+            // Determine destination address: CLI arg takes precedence over file
+            let destination_addr = if let Some(dest) = destination {
+                dest
+            } else {
+                // Try to load from donation-address.json
+                let donation_config = config::DonationConfig::from_file(&donation_address_file)
+                    .context(format!(
+                        "Failed to load donation address from {}. Please provide --destination or create donation-address.json",
+                        donation_address_file.display()
+                    ))?;
+                donation_config.destination_address
+            };
+
+            println!("🎯 Bulk Donation Setup");
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("Destination: {}", destination_addr);
+            println!("Creating {} address(es)...\n", count);
+
+            // Find cardano-cli
+            let cli_paths = vec![
+                "cardano-cli",
+                "cardano-cli.exe",
+                "./bin/cardano-cli",
+                "./bin/cardano-cli.exe",
+            ];
+            
+            let mut cardano_cli = None;
+            for path in &cli_paths {
+                let check = Command::new(path).arg("--version").output();
+                if let Ok(output) = check {
+                    if output.status.success() {
+                        cardano_cli = Some(path.to_string());
+                        break;
+                    }
+                }
+            }
+            
+            let cardano_cli = cardano_cli.context("cardano-cli not found")?;
+
+            // Create output directory
+            fs::create_dir_all(&output_dir)?;
+            
+            let mut wallet = WalletConfig {
+                addresses: Vec::new(),
+            };
+
+            let wallet_json = output_dir.join("wallet.json");
+            let client = api::ScavengerClient::new()?;
+
+            // Track overall success
+            let mut total_succeeded = 0;
+            let mut total_failed = 0;
+
+            // Process each address one at a time: create -> register -> donate
+            for i in 0..count {
+                let name = format!("{}-{}", wallet_name, i);
+                println!("📝 Creating address {}/{}: {}", i + 1, count, name);
+
+                let payment_vkey = output_dir.join(format!("{}.vkey", name));
+                let payment_skey = output_dir.join(format!("{}.skey", name));
+                let stake_vkey = output_dir.join(format!("{}-stake.vkey", name));
+                let stake_skey = output_dir.join(format!("{}-stake.skey", name));
+                let payment_addr = output_dir.join(format!("{}.addr", name));
+
+                // Generate payment key pair
+                let payment_output = Command::new(&cardano_cli)
+                    .args(&[
+                        "address", "key-gen",
+                        "--verification-key-file", payment_vkey.to_str().unwrap(),
+                        "--signing-key-file", payment_skey.to_str().unwrap(),
+                    ])
+                    .output()?;
+
+                if !payment_output.status.success() {
+                    anyhow::bail!("Failed to generate payment keys: {}", 
+                        String::from_utf8_lossy(&payment_output.stderr));
+                }
+
+                // Generate stake key pair
+                let stake_output = Command::new(&cardano_cli)
+                    .args(&[
+                        "stake-address", "key-gen",
+                        "--verification-key-file", stake_vkey.to_str().unwrap(),
+                        "--signing-key-file", stake_skey.to_str().unwrap(),
+                    ])
+                    .output()?;
+
+                if !stake_output.status.success() {
+                    anyhow::bail!("Failed to generate stake keys: {}", 
+                        String::from_utf8_lossy(&stake_output.stderr));
+                }
+
+                // Build payment address
+                let addr_output = Command::new(&cardano_cli)
+                    .args(&[
+                        "address", "build",
+                        "--payment-verification-key-file", payment_vkey.to_str().unwrap(),
+                        "--stake-verification-key-file", stake_vkey.to_str().unwrap(),
+                        "--mainnet",
+                    ])
+                    .output()?;
+
+                if !addr_output.status.success() {
+                    anyhow::bail!("Failed to build address: {}", 
+                        String::from_utf8_lossy(&addr_output.stderr));
+                }
+
+                let address = String::from_utf8(addr_output.stdout)?.trim().to_string();
+                fs::write(&payment_addr, &address)?;
+
+                // Read verification key to get public key
+                let vkey_content = fs::read_to_string(&payment_vkey)?;
+                let vkey_json: serde_json::Value = serde_json::from_str(&vkey_content)?;
+                let pubkey_hex = vkey_json["cborHex"]
+                    .as_str()
+                    .context("Failed to extract public key")?
+                    .trim_start_matches("5820")
+                    .to_string();
+
+                let entry = wallet::AddressEntry {
+                    address: address.clone(),
+                    verification_key: pubkey_hex.clone(),
+                };
+                
+                wallet.addresses.push(entry);
+                wallet.to_file(&wallet_json)?;
+
+                println!("   ✅ Created: {}", address);
+
+                // Now immediately register this address
+                println!("🔐 Registering address {}/{}...", i + 1, count);
+                
+                let mut address_fully_configured = false;
+                
+                // Sign T&C
+                let tandc = client.get_terms_and_conditions(None).await?;
+                let reg_signature = wallet::sign_message_with_key(
+                    &tandc.message,
+                    &address,
+                    &payment_skey,
+                )?;
+
+                // Register with retry logic
+                let mut attempt = 0;
+                let max_attempts = 3;
+                let mut registered = false;
+
+                while attempt < max_attempts && !registered {
+                    attempt += 1;
+                    
+                    match client.register(&address, &reg_signature, &pubkey_hex).await {
+                        Ok(_) => {
+                            println!("   ✅ Registered as miner");
+                            registered = true;
+                        }
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            if err_msg.contains("Too Many Requests") || err_msg.contains("429") {
+                                if attempt < max_attempts {
+                                    println!("   ⏳ Rate limited, waiting 5 seconds... (attempt {}/{})", attempt, max_attempts);
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                } else {
+                                    println!("   ❌ Registration failed after {} attempts: {}", max_attempts, e);
+                                }
+                            } else {
+                                println!("   ❌ Registration failed: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // If registration succeeded, register the donation
+                if registered {
+                    println!("💝 Registering donation to {}...", destination_addr);
+                    
+                    // Sign donation message
+                    let donation_signature = wallet::sign_donation_message(
+                        &destination_addr,
+                        &address,
+                        &payment_skey,
+                    )?;
+
+                    // Donate with retry logic
+                    let mut attempt = 0;
+                    let max_attempts = 3;
+                    let mut donated = false;
+
+                    while attempt < max_attempts && !donated {
+                        attempt += 1;
+                        
+                        match client.donate_to(&destination_addr, &address, &donation_signature).await {
+                            Ok(response) => {
+                                println!("   ✅ Donation registered");
+                                println!("      Solutions: {}", response.solutions_consolidated);
+                                println!("      ID: {}", response.donation_id);
+                                donated = true;
+                                address_fully_configured = true;
+                            }
+                            Err(e) => {
+                                let err_msg = e.to_string();
+                                if err_msg.contains("Too Many Requests") || err_msg.contains("429") {
+                                    if attempt < max_attempts {
+                                        println!("   ⏳ Rate limited, waiting 5 seconds... (attempt {}/{})", attempt, max_attempts);
+                                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                    } else {
+                                        println!("   ❌ Donation failed after {} attempts: {}", max_attempts, e);
+                                    }
+                                } else {
+                                    // Not a rate limit error, likely 403 Forbidden or other error
+                                    println!("   ⚠️  Donation registration failed: {}", e);
+                                    if err_msg.contains("403") || err_msg.contains("Forbidden") {
+                                        println!("   ℹ️  This is normal - address needs to mine first to accumulate solutions");
+                                        // Still consider it configured since mining registration succeeded
+                                        address_fully_configured = true;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if !donated && address_fully_configured {
+                        println!("   ℹ️  Retry donation later with:");
+                        println!("      night-miner --wallet {} donate --destination {} --signature \"{}\" --address {}", 
+                                 wallet_json.display(), destination_addr, donation_signature, address);
+                    }
+                } else {
+                    println!("   ⚠️  Skipping donation registration (mining registration failed)");
+                }
+
+                // Track overall success
+                if address_fully_configured {
+                    total_succeeded += 1;
+                } else {
+                    total_failed += 1;
+                }
+
+                // Add delay before next address to avoid rate limiting
+                if i < count - 1 {
+                    println!("");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+            }
+
+            // Summary
+            println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("📊 Summary");
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            println!("📁 Wallet: {}", wallet_json.display());
+            println!("📋 Total addresses: {}", count);
+            println!("   ✅ Fully configured: {}", total_succeeded);
+            if total_failed > 0 {
+                println!("   ❌ Failed: {}", total_failed);
+            }
+
+            if total_succeeded == count {
+                println!("\n All addresses created and registered for mining!");
+                println!("   Donation registrations set up (will activate after mining)");
+            } else {
+                println!("\n  Some addresses failed to configure. See details above.");
+            }
         }
     }
 

@@ -150,3 +150,14 @@ pub fn derive_address_from_key<P: AsRef<Path>>(signing_key_path: P, wallet_dir: 
     }
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
+
+/// Create and sign a donation message
+/// Message format: "Assign accumulated Scavenger rights to: <destination_address>"
+pub fn sign_donation_message<P: AsRef<Path>>(
+    destination_address: &str,
+    original_address: &str,
+    signing_key_path: P,
+) -> Result<String> {
+    let message = format!("Assign accumulated Scavenger rights to: {}", destination_address);
+    sign_message_with_key(&message, original_address, signing_key_path)
+}

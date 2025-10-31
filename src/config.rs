@@ -96,3 +96,41 @@ mod tests {
         assert!(config.validate().is_err());
     }
 }
+
+/// Donation address configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DonationConfig {
+    /// The Cardano address to receive donated solutions
+    pub destination_address: String,
+}
+
+impl DonationConfig {
+    /// Load donation configuration from a JSON file
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let contents =
+            fs::read_to_string(path.as_ref()).context("Failed to read donation-address.json file")?;
+
+        let config: DonationConfig =
+            serde_json::from_str(&contents).context("Failed to parse donation-address.json file")?;
+
+        Ok(config)
+    }
+
+    /// Save donation configuration to a JSON file
+    pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let contents = serde_json::to_string_pretty(self)
+            .context("Failed to serialize donation configuration")?;
+
+        fs::write(path.as_ref(), contents)
+            .context("Failed to write donation-address.json file")?;
+
+        Ok(())
+    }
+
+    /// Create an example donation configuration
+    pub fn example() -> Self {
+        Self {
+            destination_address: "addr1qx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3n0d3vllmyqwsx5wktcd8cc3sq835lu7drv2xwl2wywfgse35a3x".to_string(),
+        }
+    }
+}
