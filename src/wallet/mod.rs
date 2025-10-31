@@ -1,5 +1,6 @@
 ﻿use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -14,6 +15,10 @@ pub struct AddressEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
     pub addresses: Vec<AddressEntry>,
+    /// Track which address indices have submitted solutions for each challenge
+    /// Key: challenge_id, Value: Set of address indices
+    #[serde(default)]
+    pub challenge_submissions: HashMap<String, HashSet<usize>>,
 }
 
 impl WalletConfig {

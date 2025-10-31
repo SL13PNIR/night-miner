@@ -6,6 +6,7 @@ mod wallet;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -377,6 +378,7 @@ async fn main() -> Result<()> {
                     address: "addr1q8upjxynn626c772r5nzym...".to_string(),
                     verification_key: "YOUR_PUBLIC_KEY_HEX_64_CHARS".to_string(),
                 }],
+                challenge_submissions: HashMap::new(),
             };
 
             wallet.to_file(&output)?;
@@ -533,6 +535,7 @@ async fn main() -> Result<()> {
                     address: address.clone(),
                     verification_key: pubkey_hex.clone(),
                 }],
+                challenge_submissions: HashMap::new(),
             };
 
             wallet.to_file(&wallet_json)?;
@@ -839,6 +842,7 @@ async fn main() -> Result<()> {
             
             let mut wallet = WalletConfig {
                 addresses: Vec::new(),
+                challenge_submissions: HashMap::new(),
             };
 
             let wallet_json = output_dir.join("wallet.json");
@@ -1115,6 +1119,7 @@ async fn main() -> Result<()> {
                 println!("📝 Creating new wallet");
                 WalletConfig {
                     addresses: Vec::new(),
+                    challenge_submissions: HashMap::new(),
                 }
             };
             
@@ -1136,9 +1141,8 @@ async fn main() -> Result<()> {
             let client = api::ScavengerClient::new()?;
             let mut address_counter = wallet.addresses.len();
             
-            // Track which addresses have submitted solutions for the current challenge
-            // Key: challenge_id, Value: set of address indices that have submitted
-            let mut challenge_submissions: HashMap<String, HashSet<usize>> = HashMap::new();
+            // Use the wallet's persisted challenge submissions tracker
+            // This allows resuming from where we left off after restarts
             let mut current_address_index = 0;
             
             // Create and register the first address only if wallet is empty
@@ -1195,14 +1199,55 @@ async fn main() -> Result<()> {
 
                 println!("   ✅ Created: {}", address);
 
-                // Register the new address
+                // Register the new address with retry logic
                 println!("🔐 Registering address...");
-                let tandc = client.get_terms_and_conditions(None).await?;
-                let signature = wallet::sign_message_with_key(&tandc.message, &address, &payment_skey)?;
                 
-                match client.register(&address, &signature, &pubkey_hex).await {
-                    Ok(_) => println!("   ✅ Registered successfully"),
-                    Err(e) => anyhow::bail!("Failed to register initial address: {}", e),
+                let mut registered = false;
+                let mut attempt = 0;
+                
+                while !registered && attempt < 10 {
+                    attempt += 1;
+                    
+                    // Fetch T&C with retry
+                    let tandc = match client.get_terms_and_conditions(None).await {
+                        Ok(tc) => tc,
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            if err_msg.contains("timeout") || err_msg.contains("timed out") {
+                                println!("   ⏳ Network timeout fetching T&C, retrying in 5 seconds... (attempt {})", attempt);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                continue;
+                            } else {
+                                anyhow::bail!("Failed to fetch T&C: {}", e);
+                            }
+                        }
+                    };
+                    
+                    let signature = wallet::sign_message_with_key(&tandc.message, &address, &payment_skey)?;
+                    
+                    match client.register(&address, &signature, &pubkey_hex).await {
+                        Ok(_) => {
+                            println!("   ✅ Registered successfully");
+                            registered = true;
+                        }
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            if err_msg.contains("timeout") || err_msg.contains("timed out") {
+                                println!("   ⏳ Network timeout during registration, retrying in 5 seconds... (attempt {})", attempt);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            } else if err_msg.contains("Too Many Requests") || err_msg.contains("429") {
+                                let wait_time = std::cmp::min(10 * attempt, 60);
+                                println!("   ⏳ Rate limited, waiting {} seconds... (attempt {})", wait_time, attempt);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                            } else {
+                                anyhow::bail!("Failed to register initial address: {}", e);
+                            }
+                        }
+                    }
+                }
+                
+                if !registered {
+                    anyhow::bail!("Failed to register initial address after {} attempts", attempt);
                 }
 
                 address_counter += 1;
@@ -1215,6 +1260,10 @@ async fn main() -> Result<()> {
             // Main mining loop
             let start_time = std::time::Instant::now();
             let timeout_duration = std::time::Duration::from_secs(timeout * 60);
+            
+            // Create mining engine once (will reuse ROM across addresses)
+            let mut mining_engine = miner::MiningEngine::new(threads).with_progress_bar(true);
+            let mut current_challenge_id: Option<String> = None;
             
             'mining_loop: loop {
                 // Check if we've exceeded the challenge timeout
@@ -1243,16 +1292,17 @@ async fn main() -> Result<()> {
                         max_day,
                         ..
                     } => {
-                        // If this is a new challenge, reset to first address
-                        let submissions = challenge_submissions.entry(challenge.challenge_id.clone()).or_insert_with(HashSet::new);
+                        // Get or create the submissions set for this challenge
+                        let challenge_id = challenge.challenge_id.clone();
+                        wallet.challenge_submissions.entry(challenge_id.clone()).or_insert_with(HashSet::new);
                         
                         // Check if current address already submitted for this challenge
-                        if submissions.contains(&current_address_index) {
+                        if wallet.challenge_submissions[&challenge_id].contains(&current_address_index) {
                             // Move to next address
                             current_address_index = (current_address_index + 1) % wallet.addresses.len();
                             
                             // Check if all addresses have submitted for this challenge
-                            if submissions.len() >= wallet.addresses.len() {
+                            if wallet.challenge_submissions[&challenge_id].len() >= wallet.addresses.len() {
                                 // All addresses used, check if we have time to create a new one
                                 let time_until_next = (next_challenge_starts_at.timestamp() - chrono::Utc::now().timestamp()).max(0);
                                 
@@ -1314,14 +1364,37 @@ async fn main() -> Result<()> {
 
                                     // Register the new address with retry logic
                                     println!("🔐 Registering address...");
-                                    let tandc = client.get_terms_and_conditions(None).await?;
-                                    let signature = wallet::sign_message_with_key(&tandc.message, &address, &payment_skey)?;
                                     
                                     let mut registered = false;
                                     let mut attempt = 0;
                                     
                                     while !registered {
                                         attempt += 1;
+                                        
+                                        // Fetch T&C with retry logic
+                                        let tandc = loop {
+                                            match client.get_terms_and_conditions(None).await {
+                                                Ok(tc) => break tc,
+                                                Err(e) => {
+                                                    let err_msg = e.to_string();
+                                                    if err_msg.contains("timeout") || err_msg.contains("timed out") {
+                                                        let wait_time = std::cmp::min(5 * attempt, 30);
+                                                        println!("   ⏳ Network timeout fetching T&C, retrying in {} seconds... (attempt {})", wait_time, attempt);
+                                                        tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                                                        if attempt >= 10 {
+                                                            println!("   ⚠️  Failed to fetch T&C after {} attempts, skipping registration for now", attempt);
+                                                            continue 'mining_loop;
+                                                        }
+                                                    } else {
+                                                        println!("   ⚠️  T&C fetch error: {}, retrying...", e);
+                                                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                                    }
+                                                }
+                                            }
+                                        };
+                                        
+                                        let signature = wallet::sign_message_with_key(&tandc.message, &address, &payment_skey)?;
+                                        
                                         match client.register(&address, &signature, &pubkey_hex).await {
                                             Ok(_) => {
                                                 println!("   ✅ Registered successfully");
@@ -1335,9 +1408,21 @@ async fn main() -> Result<()> {
                                                     let wait_time = std::cmp::min(10 * attempt, 60); // Cap at 60 seconds
                                                     println!("   ⏳ Rate limited, waiting {} seconds... (attempt {})", wait_time, attempt);
                                                     tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                                                } else if err_msg.contains("timeout") || err_msg.contains("timed out") {
+                                                    let wait_time = std::cmp::min(5 * attempt, 30);
+                                                    println!("   ⏳ Network timeout during registration, retrying in {} seconds... (attempt {})", wait_time, attempt);
+                                                    tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                                                    if attempt >= 10 {
+                                                        println!("   ⚠️  Failed to register after {} attempts, skipping for now", attempt);
+                                                        continue 'mining_loop;
+                                                    }
                                                 } else {
-                                                    // Non-rate-limit error, bail out
-                                                    anyhow::bail!("Registration failed: {}", e);
+                                                    println!("   ⚠️  Registration error: {}, retrying in 10 seconds...", e);
+                                                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                                                    if attempt >= 10 {
+                                                        println!("   ⚠️  Failed to register after {} attempts, skipping for now", attempt);
+                                                        continue 'mining_loop;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1350,7 +1435,7 @@ async fn main() -> Result<()> {
                                 }
                             } else {
                                 // Skip addresses that already submitted
-                                while submissions.contains(&current_address_index) {
+                                while wallet.challenge_submissions[&challenge_id].contains(&current_address_index) {
                                     current_address_index = (current_address_index + 1) % wallet.addresses.len();
                                 }
                                 println!("\n🔄 Switching to address {}", current_address_index);
@@ -1363,13 +1448,16 @@ async fn main() -> Result<()> {
                         println!("\n🎯 Day {}/{} - Challenge {}", current_day, max_day, challenge.challenge_id);
                         println!("   Difficulty: {} ({})", challenge.difficulty, difficulty_level);
                         println!("   Mining with address {}: {}", current_address_index, current_address);
-                        println!("   Addresses: {} created, {} used this challenge", wallet.addresses.len(), submissions.len());
+                        println!("   Addresses: {} created, {} used this challenge", wallet.addresses.len(), wallet.challenge_submissions[&challenge_id].len());
 
-                        // Mine for solution
-                        let mut mining_engine = miner::MiningEngine::new(threads).with_progress_bar(true);
-                        
-                        // Initialize ROM with challenge's no_pre_mine value
-                        mining_engine.initialize_rom(&challenge.no_pre_mine)?;
+                        // Initialize ROM only if this is a new challenge (ROM is challenge-specific, not address-specific)
+                        if current_challenge_id.as_ref() != Some(&challenge.challenge_id) {
+                            println!("🔧 Initializing ROM for challenge {}...", challenge.challenge_id);
+                            mining_engine.initialize_rom(&challenge.no_pre_mine)?;
+                            current_challenge_id = Some(challenge.challenge_id.clone());
+                        } else {
+                            println!("♻️  Reusing ROM from previous address (same challenge)");
+                        }
                         
                         println!("\n⛏️  Mining...");
                         let remaining_time = timeout_duration.saturating_sub(start_time.elapsed());
@@ -1397,9 +1485,12 @@ async fn main() -> Result<()> {
                                         println!("   Receipt timestamp: {}", response.crypto_receipt.timestamp);
                                         
                                         // Mark this address as having submitted for this challenge
-                                        submissions.insert(current_address_index);
+                                        wallet.challenge_submissions.get_mut(&challenge_id).unwrap().insert(current_address_index);
                                         
-                                        println!("   Progress: {}/{} addresses used", submissions.len(), wallet.addresses.len());
+                                        // Save wallet to persist submission tracking
+                                        wallet.to_file(&wallet_json)?;
+                                        
+                                        println!("   Progress: {}/{} addresses used", wallet.challenge_submissions[&challenge_id].len(), wallet.addresses.len());
 
                                         // Brief pause before continuing
                                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -1448,20 +1539,24 @@ async fn main() -> Result<()> {
                                                 
                                                 if !registered {
                                                     println!("   ⚠️  Could not register address. Marking as used to skip it.");
-                                                    submissions.insert(current_address_index);
+                                                    wallet.challenge_submissions.get_mut(&challenge_id).unwrap().insert(current_address_index);
+                                                    wallet.to_file(&wallet_json)?;
                                                 }
                                             } else {
                                                 println!("   ⚠️  Signing key not found. Marking address as used to skip it.");
-                                                submissions.insert(current_address_index);
+                                                wallet.challenge_submissions.get_mut(&challenge_id).unwrap().insert(current_address_index);
+                                                wallet.to_file(&wallet_json)?;
                                             }
                                         } else if err_msg.contains("Solution already exists") {
                                             println!("   ⚠️  Solution was already submitted by someone else");
                                             println!("   Marking address as used and continuing to next address...");
-                                            submissions.insert(current_address_index);
+                                            wallet.challenge_submissions.get_mut(&challenge_id).unwrap().insert(current_address_index);
+                                            wallet.to_file(&wallet_json)?;
                                         } else {
                                             println!("   ❌ Submission failed: {}", e);
                                             println!("   Marking address as used and continuing...");
-                                            submissions.insert(current_address_index);
+                                            wallet.challenge_submissions.get_mut(&challenge_id).unwrap().insert(current_address_index);
+                                            wallet.to_file(&wallet_json)?;
                                         }
                                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                                     }
@@ -1486,9 +1581,9 @@ async fn main() -> Result<()> {
             println!("📁 Wallet: {}", wallet_json.display());
             println!("📋 Total addresses created: {}", wallet.addresses.len());
             
-            let total_solutions: usize = challenge_submissions.values().map(|s| s.len()).sum();
+            let total_solutions: usize = wallet.challenge_submissions.values().map(|s| s.len()).sum();
             println!("✅ Total solutions submitted: {}", total_solutions);
-            println!("📅 Challenges participated: {}", challenge_submissions.len());
+            println!("📅 Challenges participated: {}", wallet.challenge_submissions.len());
             
             println!("\n💡 You can continue mining with:");
             println!("   night-miner --wallet {} mine", wallet_json.display());
