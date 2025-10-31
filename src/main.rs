@@ -6,7 +6,9 @@ mod wallet;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -52,6 +54,10 @@ enum Commands {
         /// CIP-8/30 signature over the T&C message
         #[arg(short, long)]
         signature: String,
+
+        /// Specific address to register (defaults to primary/first address)
+        #[arg(short = 'a', long)]
+        address: Option<String>,
     },
 
     /// Fetch the current challenge information
@@ -118,9 +124,28 @@ enum Commands {
         #[arg(short = 'k', long)]
         signing_key: Option<PathBuf>,
 
+        /// Specific address to sign with (defaults to primary/first address)
+        #[arg(short = 'a', long)]
+        address: Option<String>,
+
         /// Output the signature to stdout instead of pretty format
         #[arg(short = 'o', long)]
         stdout: bool,
+    },
+
+    /// Add a new address to an existing wallet
+    AddAddress {
+        /// Name for the new address (used for file naming)
+        #[arg(short, long)]
+        name: String,
+
+        /// Directory containing the wallet.json file
+        #[arg(short = 'd', long, default_value = ".")]
+        wallet_dir: PathBuf,
+
+        /// Network: mainnet or testnet
+        #[arg(short = 'n', long, default_value = "mainnet")]
+        network: String,
     },
 }
 
@@ -176,16 +201,26 @@ async fn main() -> Result<()> {
             coordinator.run().await?;
         }
 
-        Commands::Register { signature } => {
+        Commands::Register { signature, address } => {
             let wallet_path = cli.wallet.unwrap_or_else(|| PathBuf::from("wallet.json"));
             let wallet = WalletConfig::from_file(wallet_path)?;
 
+            // Determine which address to register
+            let (reg_address, reg_pubkey) = if let Some(addr) = address {
+                let pubkey = wallet
+                    .get_pubkey_for_address(&addr)
+                    .context(format!("Address {} not found in wallet", addr))?;
+                (addr, pubkey.to_string())
+            } else {
+                (wallet.get_primary_address().to_string(), wallet.get_primary_pubkey().to_string())
+            };
+
             let client = api::ScavengerClient::new()?;
 
-            info!("Registering address: {}", wallet.get_primary_address());
+            info!("Registering address: {}", reg_address);
 
             let response = client
-                .register(wallet.get_primary_address(), &signature, wallet.get_primary_pubkey())
+                .register(&reg_address, &signature, &reg_pubkey)
                 .await?;
 
             info!("Registration successful!");
@@ -472,10 +507,21 @@ async fn main() -> Result<()> {
         Commands::Sign {
             message,
             signing_key,
+            address,
             stdout,
         } => {
             let wallet_path = cli.wallet.unwrap_or_else(|| PathBuf::from("wallet.json"));
             let wallet = WalletConfig::from_file(&wallet_path)?;
+
+            // Determine which address to sign with
+            let (sign_address, sign_pubkey) = if let Some(addr) = address {
+                let pubkey = wallet
+                    .get_pubkey_for_address(&addr)
+                    .context(format!("Address {} not found in wallet", addr))?;
+                (addr, pubkey.to_string())
+            } else {
+                (wallet.get_primary_address().to_string(), wallet.get_primary_pubkey().to_string())
+            };
 
             // If no message provided, fetch from API
             let message = if let Some(msg) = message {
@@ -510,27 +556,174 @@ async fn main() -> Result<()> {
             };
 
             info!("Signing message with key from: {:?}", key_path);
+            info!("Using address from wallet: {}", sign_address);
 
-            // Use the primary address from wallet config
-            let address = wallet.get_primary_address();
-            let pubkey = wallet.get_primary_pubkey();
-            
-            info!("Using address from wallet: {}", address);
-
-            let signature = wallet::sign_message_with_key(&message, &address, &key_path)?;
+            let signature = wallet::sign_message_with_key(&message, &sign_address, &key_path)?;
 
             if stdout {
                 println!("{}", signature);
             } else {
                 println!("✅ Signature generated successfully!");
-                println!("\nFor address: {}", address);
-                println!("With pubkey: {}", pubkey);
+                println!("\nFor address: {}", sign_address);
+                println!("With pubkey: {}", sign_pubkey);
                 println!("\nSignature:");
                 println!("{}", signature);
                 println!("\n💡 Use this to register:");
                 println!("   night-miner --wallet {} register --signature \"{}\"", 
                          wallet_path.display(), signature);
             }
+        }
+
+        Commands::AddAddress {
+            name,
+            wallet_dir,
+            network,
+        } => {
+            // Find cardano-cli
+            let cli_paths = vec![
+                "cardano-cli",
+                "cardano-cli.exe",
+                "./bin/cardano-cli",
+                "./bin/cardano-cli.exe",
+            ];
+            
+            let mut cardano_cli = None;
+            for path in &cli_paths {
+                let check = Command::new(path)
+                    .arg("--version")
+                    .output();
+                    
+                if let Ok(output) = check {
+                    if output.status.success() {
+                        cardano_cli = Some(path.to_string());
+                        let version = String::from_utf8_lossy(&output.stdout);
+                        info!("Found cardano-cli: {}", version.trim());
+                        break;
+                    }
+                }
+            }
+            
+            let cardano_cli = cardano_cli.context(
+                "cardano-cli not found. Please install Cardano CLI."
+            )?;
+
+            // Load existing wallet config
+            let wallet_json = wallet_dir.join("wallet.json");
+            let mut wallet = WalletConfig::from_file(&wallet_json)?;
+
+            let payment_vkey = wallet_dir.join(format!("{}.vkey", name));
+            let payment_skey = wallet_dir.join(format!("{}.skey", name));
+            let stake_vkey = wallet_dir.join(format!("{}-stake.vkey", name));
+            let stake_skey = wallet_dir.join(format!("{}-stake.skey", name));
+            let payment_addr = wallet_dir.join(format!("{}.addr", name));
+
+            println!("🔧 Adding new address to wallet...\n");
+
+            // Generate payment key pair
+            info!("Generating payment key pair...");
+            let payment_output = Command::new(&cardano_cli)
+                .args(&[
+                    "address", "key-gen",
+                    "--verification-key-file", payment_vkey.to_str().unwrap(),
+                    "--signing-key-file", payment_skey.to_str().unwrap(),
+                ])
+                .output()?;
+
+            if !payment_output.status.success() {
+                anyhow::bail!(
+                    "Failed to generate payment keys: {}",
+                    String::from_utf8_lossy(&payment_output.stderr)
+                );
+            }
+            println!("✅ Payment keys generated");
+
+            // Generate stake key pair
+            info!("Generating stake key pair...");
+            let stake_output = Command::new(&cardano_cli)
+                .args(&[
+                    "stake-address", "key-gen",
+                    "--verification-key-file", stake_vkey.to_str().unwrap(),
+                    "--signing-key-file", stake_skey.to_str().unwrap(),
+                ])
+                .output()?;
+
+            if !stake_output.status.success() {
+                anyhow::bail!(
+                    "Failed to generate stake keys: {}",
+                    String::from_utf8_lossy(&stake_output.stderr)
+                );
+            }
+            println!("✅ Stake keys generated");
+
+            // Build payment address
+            info!("Building payment address...");
+            let network_arg = match network.as_str() {
+                "testnet" => "--testnet-magic 1",
+                _ => "--mainnet",
+            };
+
+            let addr_output = Command::new(&cardano_cli)
+                .args(&[
+                    "address", "build",
+                    "--payment-verification-key-file", payment_vkey.to_str().unwrap(),
+                    "--stake-verification-key-file", stake_vkey.to_str().unwrap(),
+                ])
+                .args(network_arg.split_whitespace())
+                .output()?;
+
+            if !addr_output.status.success() {
+                anyhow::bail!(
+                    "Failed to build address: {}",
+                    String::from_utf8_lossy(&addr_output.stderr)
+                );
+            }
+
+            let address = String::from_utf8(addr_output.stdout)?
+                .trim()
+                .to_string();
+
+            fs::write(&payment_addr, &address)?;
+            println!("✅ Address generated: {}", address);
+
+            // Read verification key to get public key
+            let vkey_content = fs::read_to_string(&payment_vkey)?;
+            let vkey_json: serde_json::Value = serde_json::from_str(&vkey_content)?;
+            let pubkey_hex = vkey_json["cborHex"]
+                .as_str()
+                .context("Failed to extract public key from verification key")?
+                .trim_start_matches("5820")
+                .to_string();
+
+            println!("✅ Verification key: {}", pubkey_hex);
+
+            // Add new address to wallet config
+            wallet.addresses.push(wallet::AddressEntry {
+                address: address.clone(),
+                verification_key: pubkey_hex.clone(),
+            });
+
+            wallet.to_file(&wallet_json)?;
+
+            println!("\n✅ Address added successfully!");
+            println!("\n📁 Files created:");
+            println!("   Payment verification key: {}", payment_vkey.display());
+            println!("   Payment signing key:      {}", payment_skey.display());
+            println!("   Stake verification key:   {}", stake_vkey.display());
+            println!("   Stake signing key:        {}", stake_skey.display());
+            println!("   Payment address:          {}", payment_addr.display());
+            println!("\n📋 Wallet now has {} address(es)", wallet.addresses.len());
+
+            println!("\n🔐 SECURITY:");
+            println!("   ⚠️  Keep your .skey files secure and private!");
+            println!("   ⚠️  Back them up securely!");
+
+            println!("\n📋 Next steps:");
+            println!("   1. Sign the T&C for this address:");
+            println!("      night-miner --wallet {} sign --signing-key {}", 
+                     wallet_json.display(), payment_skey.display());
+            println!("   2. Register with signature:");
+            println!("      night-miner --wallet {} register --signature \"<signature>\"", 
+                     wallet_json.display());
         }
     }
 
