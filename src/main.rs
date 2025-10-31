@@ -1316,7 +1316,8 @@ async fn main() -> Result<()> {
                                 // All addresses used, check if we have time to create a new one
                                 let time_until_next = (next_challenge_starts_at.timestamp() - chrono::Utc::now().timestamp()).max(0);
                                 
-                                if time_until_next > 300 { // At least 5 minutes remaining
+                                // Need at least 30s to create, register, and mine
+                                if time_until_next > 30 {
                                     println!("\n🔄 All addresses have solutions. Creating new address...");
                                     
                                     // Create and register new address
