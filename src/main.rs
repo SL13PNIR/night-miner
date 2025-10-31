@@ -1272,8 +1272,18 @@ async fn main() -> Result<()> {
                     break 'mining_loop;
                 }
 
-                // Get current challenge
-                let challenge_response = client.get_challenge().await?;
+                // Get current challenge with retry logic
+                let challenge_response = loop {
+                    match client.get_challenge().await {
+                        Ok(response) => break response,
+                        Err(e) => {
+                            println!("   ⚠️  Failed to fetch challenge: {}", e);
+                            println!("   🔄 Retrying in 10 seconds...");
+                            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                            continue;
+                        }
+                    }
+                };
                 
                 match challenge_response.data {
                     api::ChallengeData::Before { starts_at } => {
@@ -1475,11 +1485,44 @@ async fn main() -> Result<()> {
                                 // Submit solution (convert nonce to 16-char hex string without 0x prefix)
                                 let nonce_hex = format!("{:016x}", nonce);
                                 println!("📤 Submitting solution...");
-                                match client.submit_solution(
-                                    current_address,
-                                    &challenge.challenge_id,
-                                    &nonce_hex,
-                                ).await {
+                                
+                                // Retry submission up to 5 times with exponential backoff
+                                let mut submission_result = None;
+                                for submit_attempt in 1..=5 {
+                                    match client.submit_solution(
+                                        current_address,
+                                        &challenge.challenge_id,
+                                        &nonce_hex,
+                                    ).await {
+                                        Ok(response) => {
+                                            submission_result = Some(Ok(response));
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            let err_msg = e.to_string();
+                                            // Retry on network errors (timeouts, connection errors, service unavailable)
+                                            let is_retryable = err_msg.contains("timed out") 
+                                                || err_msg.contains("timeout")
+                                                || err_msg.contains("connection error")
+                                                || err_msg.contains("forcibly closed")
+                                                || err_msg.contains("unavailable")
+                                                || err_msg.contains("service unavailable")
+                                                || err_msg.contains("INTERNAL_FUNCTION_SERVICE_UNAVAILABLE");
+                                            
+                                            if is_retryable && submit_attempt < 5 {
+                                                let wait_time = 2_u64.pow(submit_attempt) * 5; // 10, 20, 40, 80 seconds
+                                                println!("   ⚠️  Network error during submission (attempt {}/5): {}", submit_attempt, err_msg.lines().next().unwrap_or(&err_msg));
+                                                println!("   🔄 Retrying in {} seconds...", wait_time);
+                                                tokio::time::sleep(tokio::time::Duration::from_secs(wait_time)).await;
+                                            } else {
+                                                submission_result = Some(Err(e));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                match submission_result.unwrap() {
                                     Ok(response) => {
                                         println!("   ✅ Solution accepted!");
                                         println!("   Receipt timestamp: {}", response.crypto_receipt.timestamp);
@@ -1505,8 +1548,28 @@ async fn main() -> Result<()> {
                                             let payment_skey = output_dir.join(format!("{}.skey", addr_name));
                                             
                                             if payment_skey.exists() {
-                                                let tandc = client.get_terms_and_conditions(None).await?;
-                                                let signature = wallet::sign_message_with_key(&tandc.message, current_address, &payment_skey)?;
+                                                // Get T&C with retry logic
+                                                let tandc = loop {
+                                                    match client.get_terms_and_conditions(None).await {
+                                                        Ok(tc) => break tc,
+                                                        Err(e) => {
+                                                            println!("   ⚠️  Failed to fetch T&C: {}", e);
+                                                            println!("   🔄 Retrying in 5 seconds...");
+                                                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                                        }
+                                                    }
+                                                };
+                                                let signature = match wallet::sign_message_with_key(&tandc.message, current_address, &payment_skey) {
+                                                    Ok(sig) => sig,
+                                                    Err(e) => {
+                                                        println!("   ❌ Failed to sign message: {}", e);
+                                                        println!("   Marking address as used to skip it.");
+                                                        wallet.challenge_submissions.get_mut(&challenge_id).unwrap().insert(current_address_index);
+                                                        wallet.to_file(&wallet_json)?;
+                                                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                                        continue 'mining_loop;
+                                                    }
+                                                };
                                                 let pubkey = &wallet.addresses[current_address_index].verification_key;
                                                 
                                                 let mut registered = false;
