@@ -1436,7 +1436,6 @@ async fn main() -> Result<()> {
                                             }
                                         }
                                     }
-                                }
                             } else {
                                 // Skip addresses that already submitted
                                 while wallet.challenge_submissions[&challenge_id].contains(&current_address_index) {
