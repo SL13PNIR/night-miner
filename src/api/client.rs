@@ -77,6 +77,9 @@ impl ScavengerClient {
         );
 
         debug!("Registering address: {}", address);
+        debug!("Signature: {}", signature);
+        debug!("Pubkey: {}", pubkey);
+        debug!("Full URL: {}", url);
 
         let response = self
             .client

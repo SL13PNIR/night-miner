@@ -5,14 +5,12 @@ use std::path::Path;
 use std::process::Command;
 use tracing::info;
 
-/// Individual address entry in the wallet
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddressEntry {
     pub address: String,
     pub verification_key: String,
 }
 
-/// Wallet configuration with multiple addresses
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
     pub addresses: Vec<AddressEntry>,
@@ -69,34 +67,54 @@ impl WalletConfig {
 pub fn sign_message_with_key<P: AsRef<Path>>(message: &str, address: &str, signing_key_path: P) -> Result<String> {
     use cardano_serialization_lib::PrivateKey;
     use serde_cbor::Value as CborValue;
+    
     let key_content = fs::read_to_string(signing_key_path.as_ref()).context("Failed to read signing key file")?;
     let key_json: serde_json::Value = serde_json::from_str(&key_content).context("Failed to parse signing key JSON")?;
     let cbor_hex = key_json["cborHex"].as_str().context("Missing cborHex field in signing key")?;
     let cbor_bytes = hex::decode(cbor_hex).context("Failed to decode cborHex")?;
     let private_key = PrivateKey::from_normal_bytes(&cbor_bytes[2..34]).map_err(|e| anyhow::anyhow!("Failed to parse private key: {:?}", e))?;
-    let payload_text = if message.starts_with('{') { message.to_string() } else { format!("\"{}\"", message) };
-    let payload = format!("{{\"hashed\":{}}}", payload_text);
+    
     let (_, addr_data) = bech32::decode(address).map_err(|e| anyhow::anyhow!("Failed to decode bech32 address: {}", e))?;
     let addr_bytes = addr_data;
-    let signature = private_key.sign(payload.as_bytes());
-    let signature_bytes = signature.to_bytes();
-    let protected = {
+    
+    // CIP-8: The payload is just the message bytes
+    // The "hashed": false flag goes in the UNPROTECTED headers, not the payload!
+    let message_bytes = message.as_bytes().to_vec();
+    let payload_cbor = message_bytes.clone();
+    
+    let protected_map_cbor = {
         let mut map = std::collections::BTreeMap::new();
         map.insert(CborValue::Integer(1), CborValue::Integer(-8));
-        map.insert(CborValue::Integer(4), CborValue::Bytes(addr_bytes[1..29].to_vec()));
+        map.insert(CborValue::Text("address".to_string()), CborValue::Bytes(addr_bytes));
         serde_cbor::to_vec(&CborValue::Map(map))?
     };
-    let unprotected = {
+    
+    let sig_structure = CborValue::Array(vec![
+        CborValue::Text("Signature1".to_string()),
+        CborValue::Bytes(protected_map_cbor.clone()),
+        CborValue::Bytes(vec![]),
+        CborValue::Bytes(payload_cbor.clone()),
+    ]);
+    let sig_structure_cbor = serde_cbor::to_vec(&sig_structure)?;
+    
+    let signature = private_key.sign(&sig_structure_cbor);
+    let signature_bytes = signature.to_bytes();
+    
+    // CIP-8: Add "hashed": false to unprotected headers
+    let unprotected_map = {
         let mut map = std::collections::BTreeMap::new();
-        map.insert(CborValue::Text("address".to_string()), CborValue::Text(address.to_string()));
+        map.insert(CborValue::Text("hashed".to_string()), CborValue::Bool(false));
         CborValue::Map(map)
     };
+    
+    // CIP-8 uses plain COSE_Sign1 (no Tag 98 wrapper like CIP-30)
     let cose_sign1 = CborValue::Array(vec![
-        CborValue::Bytes(protected),
-        unprotected,
-        CborValue::Bytes(payload.as_bytes().to_vec()),
+        CborValue::Bytes(protected_map_cbor),
+        unprotected_map,
+        CborValue::Bytes(payload_cbor),
         CborValue::Bytes(signature_bytes.to_vec()),
     ]);
+    
     let signature_cbor = serde_cbor::to_vec(&cose_sign1)?;
     Ok(hex::encode(signature_cbor))
 }

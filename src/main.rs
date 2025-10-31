@@ -110,9 +110,9 @@ enum Commands {
 
     /// Sign a message using your wallet's signing key
     Sign {
-        /// Message to sign
+        /// Message to sign (if not provided, fetches current T&C message from API)
         #[arg(short, long)]
-        message: String,
+        message: Option<String>,
 
         /// Path to signing key file (Cardano .skey format)
         #[arg(short = 'k', long)]
@@ -459,15 +459,13 @@ async fn main() -> Result<()> {
             println!("   ⚠️  Never share your signing keys!");
 
             println!("\n📋 Next steps:");
-            println!("   1. Get T&C message:");
-            println!("      night-miner tandc");
-            println!("   2. Sign the T&C message:");
-            println!("      night-miner --wallet {} sign --message \"<message>\" --signing-key {}", 
+            println!("   1. Sign the T&C (automatically fetches current message from API):");
+            println!("      night-miner --wallet {} sign --signing-key {}", 
                      wallet_json.display(), payment_skey.display());
-            println!("   3. Register with signature:");
+            println!("   2. Register with signature:");
             println!("      night-miner --wallet {} register --signature \"<signature>\"", 
                      wallet_json.display());
-            println!("   4. Start mining:");
+            println!("   3. Start mining:");
             println!("      night-miner --wallet {} mine", wallet_json.display());
         }
 
@@ -478,6 +476,21 @@ async fn main() -> Result<()> {
         } => {
             let wallet_path = cli.wallet.unwrap_or_else(|| PathBuf::from("wallet.json"));
             let wallet = WalletConfig::from_file(&wallet_path)?;
+
+            // If no message provided, fetch from API
+            let message = if let Some(msg) = message {
+                msg
+            } else {
+                info!("No message provided, fetching current T&C from API...");
+                let client = api::ScavengerClient::new()?;
+                let tandc = client.get_terms_and_conditions(None).await?;
+                info!("Fetched T&C version {}", tandc.version);
+                if !stdout {
+                    println!("📜 Using T&C message (version {}):", tandc.version);
+                    println!("{}\n", tandc.message);
+                }
+                tandc.message
+            };
 
             // Determine signing key path
             let key_path = if let Some(key) = signing_key {
@@ -498,15 +511,11 @@ async fn main() -> Result<()> {
 
             info!("Signing message with key from: {:?}", key_path);
 
-            // Derive the actual address from the signing key to ensure signature matches
-            let wallet_dir = wallet_path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
-            let address = wallet::derive_address_from_key(&key_path, &wallet_dir)?;
+            // Use the primary address from wallet config
+            let address = wallet.get_primary_address();
+            let pubkey = wallet.get_primary_pubkey();
             
-            info!("Derived address from signing key: {}", address);
-
-            // Find the matching verification key for this address
-            let pubkey = wallet.get_pubkey_for_address(&address)
-                .context(format!("Address {} not found in wallet.json", address))?;
+            info!("Using address from wallet: {}", address);
 
             let signature = wallet::sign_message_with_key(&message, &address, &key_path)?;
 

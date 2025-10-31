@@ -1,0 +1,276 @@
+﻿use blake2::{Blake2b, Digest};
+use blake2::digest::consts::U28;
+
+fn main() {
+    let content = r#"**TOKEN END-USER TERMS**
+
+Last updated: 3 October 2025.
+
+These Token End-User Terms (the "**Token End-User Terms**") are a legally binding agreement between you ("**User**", "**you**", or "**your**") and Midnight TGE Ltd., a company registered in the British Virgin Islands with registered address at Craigmuir Chambers, Road Town, Tortola, VG, 1110, BVI ("**Midnight**," "**we**", "**us**", or "**our**").
+
+Midnight provides the NIGHT website and portal (the "**Website**") and related services and products, including the ability to Claim and redeem via the Website the digital blockchain tokens known as 'NIGHT' and their smallest denomination sub-unit 'STAR' (the "**Tokens**").
+
+The Tokens are being distributed through the Glacier Drop distribution program, which comprises the following phases:
+
+1. the 'Glacier Drop' (the first claim phase)
+2. the 'Scavenger Mine' (the second claim phase); and
+3. the 'Lost & Found' claim phase (the third phase),
+
+(with these phases (and the related redemption functionality provided by Midnight) together referred to in these Token End-User Terms as the "**Glacier Drop Program**").
+
+These Token End-User Terms, the [Website Terms of Use](https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20TGE%20-%20Website%20Terms%20of%20Use.pdf) and (once in effect) the Global Terms (together, the "**Agreement**") govern your use of the Website, and related services and products, including governing your ability to Claim and redeem via the Website the Tokens distributed through the Glacier Drop Program. If you hold or use Tokens, please note that additional terms (the Global Terms) will also apply to your use and ownership of the Tokens once such terms are in effect.
+
+We encourage you to review these Token End-User Terms carefully. These Token End-User Terms are entered into between you and Midnight when you click to agree to these Token End-User Terms at the start of your participation in the Glacier Drop Program and when Claiming and/or redeeming the Token(s) via the Glacier Drop Program. These Token End-User Terms will remain in full force and effect until terminated in accordance with Section 10 (Term and Termination). If you do not agree with any of the provisions of these Token End-User Terms, you may not participate in or use the Website or the Glacier Drop Program.
+
+**IF YOU RESIDE IN THE UNITED STATES, PLEASE NOTE SECTION 13 CONTAINS AN ARBITRATION CLAUSE AND CLASS ACTION WAIVER. IF YOU RESIDE IN THE UNITED STATES AND AGREE TO THESE TOKEN-END USER TERMS, YOU AGREE (A) TO RESOLVE ALL DISPUTES (WITH LIMITED EXCEPTION) RELATED TO THESE TOKEN END-USER TERMS AND MIDNIGHT'S WEBSITE, THE GLACIER DROP PROGRAM, AND/OR THE TOKENS THROUGH BINDING ARBITRATION, WHICH MEANS THAT YOU WAIVE ANY RIGHT TO HAVE THOSE DISPUTES DECIDED BY A JUDGE OR JURY, AND (B) TO WAIVE YOUR RIGHT TO PARTICIPATE IN CLASS ACTIONS OR REPRESENTATIVE ACTIONS AS SET FORTH BELOW. YOU HAVE THE RIGHT TO OPT-OUT OF THE ARBITRATION CLAUSE AND THE CLASS ACTION WAIVER AS EXPLAINED IN SECTION 13.**
+
+**Changes to these Token End-User Terms**. As necessary, we may update these Token End-User Terms from time to time to reflect changes in the Glacier Drop Program and/or Tokens or to comply with legal requirements, and we will provide you with notice of this, as may be required under applicable laws. If you do not agree to our changes, you must discontinue your use of the Website, and participation in the Glacier Drop Program and Claim of Tokens via the Glacier Drop Program. Your continued participation in the Glacier Drop Program and/or Claim of Tokens via the Glacier Drop Program after the changes take effect, amounts to your acceptance of the updated Token End-User Terms. The date at the top of this page indicates when these Token End-User Terms were last updated.
+
+1. **DEFINITIONS**
+
+    1. "**Agreement**" means the Token End-User Terms, the Website Terms of Use, and (once in effect) the Global Terms.
+
+    2. "**Blockchain**" means any blockchain on which the Tokens are issued.
+
+    3. "**Claim**" or "**Claiming**" means the process by which you claim Tokens via the Website.
+
+    4. "**Glacier Drop Program**" has the meaning given in the introductory paragraphs above.
+
+    5. "**Glacier Drop**" means the specific token distribution method for Tokens, referred to as the 'Glacier Drop' in the NIGHT White Paper, and that includes a Lockup as described in these Token End-User Terms.
+
+    6. "**Lockup**" means the restriction under which your Claimed Tokens cannot be transferred, sold, or otherwise disposed of as further described in Sections 4.2 and 4.3 of these Token End-User Terms.
+
+    7. "**Lost-and-Found**" means the third Token claim phase, referred to as 'Lost-and-Found' in the NIGHT White Paper.
+
+    8. "**NIGHT White Paper**" means the NIGHT white paper [available here](https://www.midnight.gd/night-mica-white-paper).
+
+    9. "**Scavenger Mine**" means the specific token distribution method for Tokens, referred to as the 'Scavenger Mine' in the NIGHT White Paper, and that includes a Lockup as described in these Token End-User Terms.
+
+    10. "**Smart Contract(s)**" means the rules that govern the distribution, lockup, and functionality of the Tokens, which are encoded into software and deployed on the Blockchain.
+
+    11. "**Token**" or "**Tokens**" means the digital blockchain tokens known as "NIGHT" and their smallest-denomination sub-unit "STAR" as described in the NIGHT White Paper.
+
+    12. "**Wallet**" means a blockchain address compatible with the Blockchain and capable of receiving and storing the Tokens.
+
+    13. "**Website**" means the NIGHT website and portal available at [www.midnight.gd](http://www.midnight.gd).
+
+2. **TOKEN CLAIM RIGHTS**
+
+    1. Subject to your compliance with these Token End-User Terms, Midnight grants you a limited, non-exclusive, non-transferable, revocable right to Claim and/or receive the Tokens in accordance with these Token End-User Terms, the [Website Terms of Use](https://45047878.fs1.hubspotusercontent-na1.net/hubfs/45047878/Midnight%20TGE%20-%20Website%20Terms%20of%20Use.pdf), the Global Terms (once the Global Terms are in effect and you have redeemed the Tokens), and any documentation provided by Midnight to you.
+
+    2. Nothing in these Token End-User Terms should be interpreted as granting you any ownership, equity, security, or other interest or right in or to Midnight or its assets, operations, products, intellectual property, or services.
+
+3. **ELIGIBILITY AND REQUIREMENTS**
+
+    1. Glacier Drop Eligibility:
+
+        1. If you control one or more blockchain addresses with a minimum balance in native tokens on one or more of the eligible networks and meet the eligibility requirements to participate in the Glacier Drop, as set out in the NIGHT White Paper, you may be eligible to Claim Tokens via the Glacier Drop.
+
+        2. The Glacier Drop will be open until approximately 20 October 2025.
+
+    2. Scavenger Mine Eligibility:
+
+        1. If you successfully provide solutions to certain computational tasks, as described in further detail in the NIGHT White Paper and the Website, you may be eligible to Claim Tokens via the Scavenger Mine.
+
+    3. By Claiming the Tokens, you represent and warrant that:
+
+        1. you are at least 18 years of age and have the legal capacity to enter into these Token End-User Terms;
+
+        2. you are not a resident of, or located in, any jurisdiction where the distribution, Claiming, holding, or use of the Tokens would be prohibited by applicable law;
+
+        3. you and, if applicable, your affiliates or direct or indirect beneficial owners (i) do not appear on the Specially Designated Nationals and Blocked Persons List of the Office of Foreign Assets Control of the United States Department of the Treasury (OFAC), the EU consolidated list of persons, groups and entities subject to financial sanctions, the UK Consolidated List of Financial Sanctions Targets, and (ii) are not a person identified as a terrorist organization on any other relevant lists maintained by any governmental authority in the EU, USA, or UK;
+
+        4. you are Claiming the Tokens for your own use and not on behalf of any other person or entity;
+
+        5. you have sufficient understanding of blockchain technology, cryptographic tokens, and digital assets to understand the risks involved in Claiming and using the Tokens; and
+
+        6. you have read, understood, and agree to comply with all documentation provided by Midnight regarding the Tokens.
+
+    4. You acknowledge that Midnight may, at its sole discretion, require you to undergo identity verification or other compliance procedures before or after Claiming your Tokens.
+
+4. **TOKEN FUNCTIONALITY, LOCKUPS, AND RISKS**
+
+    1. Please refer to the NIGHT White Paper for further details about the purpose and functionality of the NIGHT Tokens.
+
+    2. Lockup:
+
+        1. By participating in the Glacier Drop and/or the Scavenger Mine, you acknowledge and agree that the Claimed NIGHT Tokens will be subject to a restriction on transfer, sale, exchange or other disposal until they are released from this restriction in accordance with a four-instalment unlock schedule during a 360-day unlock period as described in the NIGHT White Paper.
+
+        2. You will be unable to transfer, sell, exchange, or otherwise dispose of Claimed Tokens until they are released from the Lockup.
+
+        3. The Lockup will be administered through the Smart Contracts and/or other technical mechanisms.
+
+        4. Midnight reserves the right to modify the duration or terms of the Lockup at its sole discretion, provided that such modifications are communicated to Token holders in advance.
+
+        5. Tokens will be released from the Lockup automatically through the Smart Contract in accordance with the unlock schedule, subject to the terms of these Token End-User Terms and applicable laws.
+
+        6. By participating in the Glacier Drop Program, you acknowledge and agree:
+
+            1. you may be unable to realise any value from your Claimed Tokens, including in the event of adverse market conditions or regulatory changes;
+
+            2. you are not granted any ownership, equity, security, or other interest or right in the Tokens during the Lockup; and
+
+            3. you are not permitted to circumvent or attempt to circumvent the Lockup in any way.
+
+    3. By Claiming the Tokens, you acknowledge and accept the risks set out in the NIGHT White Paper (including but not limited to Part I (Information on Risks) of the NIGHT White Paper).
+
+5. **USER RESPONSIBILITIES**
+
+    1. You are solely responsible for:
+
+        1. maintaining the security of your Wallet and any private keys, passwords, or private credentials associated with your Wallet or the Tokens (please note, we will never ask you for this information);
+
+        2. ensuring that you have a Wallet compatible with the Blockchain and the Tokens before initiating a Claim;
+
+        3. providing accurate information when Claiming the Tokens;
+
+        4. complying with all laws and regulations in your jurisdiction applicable to you, including in relation to blockchain tokens, virtual assets, securities, commodities, and currencies;
+
+        5. paying any taxes or government charges that may be imposed on your Claiming, holding, or use of the Tokens; and
+
+        6. complying with the provisions of the Global Terms once these are in effect and where these apply to your holding and/or use of Tokens.
+
+    2. You acknowledge and agree that loss of access to your Wallet or private keys may result in irreversible loss, or indefinite inaccessibility, of your Tokens, and that Midnight is not responsible for, and cannot recover or restore, lost or inaccessible Tokens.
+
+6. **PROHIBITED ACTIVITIES**
+
+    1. In connection with your Claim or use of the Tokens, you agree not to:
+
+        1. violate any applicable laws, regulations, or third-party rights;
+
+        2. use the Tokens for any illegal purpose, including money laundering, terrorist financing, or tax evasion;
+
+        3. attempt to modify, reverse-engineer, subvert, or tamper with the Smart Contract or any other aspect of the Token functionality, including attempting to circumvent the Lockup;
+
+        4. use any automated system or software to extract data or information from, or related to, the Website, Services, the Glacier Drop Program, or any of our, or our agents' or suppliers', servers (i.e., data scraping);
+
+        5. make any false, misleading, or deceptive statements regarding the Tokens or Midnight; or
+
+        6. impersonate Midnight or any other person or entity, or falsely state or otherwise misrepresent any affiliation with Midnight or any other person or entity.
+
+7. **INTELLECTUAL PROPERTY**
+
+    1. All intellectual property rights in the Tokens, the Smart Contract, the Website and any related software, documentation, services, products or content provided by Midnight are owned by Midnight, its affiliates or their licensors (as applicable).
+
+    2. Nothing in these Token End-User Terms transfers any ownership rights in the intellectual property to you or grants you any right to use Midnight's intellectual property except as expressly provided in these Token End-User Terms.
+
+8. **DISCLAIMERS**
+
+    1. It is your responsibility to check whether the Tokens meet your purposes or needs. We do not promise or guarantee that the Tokens will fulfil any particular purposes or needs that you may have.
+
+    2. Except for the Token and the Glacier Drop Program descriptions set out in these Token End-User Terms and any other documents we have provided to you, we do not promise or guarantee that the Tokens and/or the Glacier Drop Program will meet any specific requirements or specifications.
+
+    3. While we will use reasonable care and skill to keep the Website and/or the Glacier Drop Program online, we do not promise or guarantee that the Website and/or Glacier Drop Program will be uninterrupted or always accessible. We do not accept liability for any losses you may suffer due to such interruptions or inaccessibility.
+
+9. **LIABILITY**
+
+    **This section limits the liability that we accept, and the types of damages that you may be able to recover from us. Please read it carefully.**
+
+    1. We don't exclude or restrict our liability in any way that would be unlawful (including our liability for any death or personal injury caused by our negligence, or for any fraud or fraudulent misrepresentation by us, our employees or directors). The exclusions and limitations below are all subject to this statement. References to liability in this section include every kind of liability arising under or in connection with these Token End-User Terms, including liability in contract, tort (including negligence), or otherwise.
+
+    2. We are not responsible and do not accept liability for loss or damage that is not 'foreseeable'. Loss or damage is 'foreseeable' if either it is obvious that it will happen or if, at the time you agree to these Token End-User Terms, both you and we are aware that it might occur.
+
+    3. We are not liable to you for any failure to perform our responsibilities:
+
+        1. due to any abnormal or unforeseeable event outside our reasonable control (including but not limited to acts of terrorism, significant weather-related events such as major floods, general strikes, general Internet outages, or epidemics or pandemics) and despite us having taken reasonable precautions against such events; or
+
+        2. where performing our responsibilities would put us in breach of applicable law (e.g., where we have reasonable grounds to suspect that the Website, Glacier Drop Program, or Tokens are being used for fraud).
+
+    4. We do not accept liability for losses you may suffer if you do not meet the applicable eligibility criteria to participate in the Glacier Drop Program or are unable to pay any network fees to third parties to redeem Tokens.
+
+    5. Midnight's total liability to you arising from, or in connection with, these Token End-User Terms shall not exceed one thousand euros (EUR 1000) (or the equivalent amount in your jurisdiction).
+
+    6. We encourage you to check and inform us, to the best of your ability, of any issues or problems at the earliest opportunity, and take prompt action as soon as you become aware of any problem (and in any event within 6 months of becoming aware of any problem).
+
+10. **TERM AND TERMINATION**
+
+    1. These Token End-User Terms will remain in full force and effect while you Claim, hold, or use the Tokens, unless terminated in accordance with this Section 10.
+
+    2. You may stop participating in the Glacier Drop Program and stop Claiming, holding or using the Tokens at any time (subject to the restrictions applicable for the duration of the Lockup as set out at Section 4.2). Certain sections of these Token End-User Terms will, by their nature, apply even when you no longer participate in the Glacier Drop Program or Claim, hold or use the Tokens; see Section 10.5(a) below for further details.
+
+    3. We may terminate these Token End-User Terms immediately, by restricting your access to the Website and/or blocking your Wallet address:
+
+        1. if you breach these Token End-User Terms in a serious or repeated manner;
+
+        2. if you breach any of the restrictions in Section 3 (Eligibility and Requirements) or Section 6 (Prohibited Activities);
+
+        3. if we reasonably believe that you are using (or are allowing someone else to use) the Tokens in breach of any applicable laws, rules or regulations, or in furtherance of illegal, fraudulent or prohibited activities; or
+
+        4. if we are required to do so by any law, regulation, court order or instruction from an ombudsman, regulator or government body.
+
+    4. We may also terminate these Token End-User Terms without cause, including if we decide to cease to provide the Glacier Drop Program and/or Tokens, by providing at least 14 days' advance written notice to you on our Website.
+
+    5. Upon termination of these Token End-User Terms for any reason:
+
+        1. Sections 4.2, 4.3 and 5 through to 14 will survive termination;
+
+        2. all rights to use or participate in Glacier Drop Program, or Claim, hold or use any Tokens granted under these Token End-User Terms will cease; and
+
+        3. you must immediately cease use of the Website and participation in Glacier Drop Program, and stop Claiming, holding or using any Tokens.
+
+11. **CONTACT DETAILS, COMPLAINTS AND DISPUTE RESOLUTION**
+
+    1. If you have a complaint or dispute with Midnight, you can contact us via email at [legal@midnighttge.io](mailto:legal@midnighttge.io) to attempt to resolve the issue. You can also bring legal proceedings in the courts (see Section 14 (Governing Law and Jurisdiction)).
+
+12. **OTHER**
+
+    1. **Severability**: If any provision of these Token End-User Terms is held to be unenforceable or invalid, such provision will be changed and interpreted to accomplish the objectives of such provision to the greatest extent possible under applicable law, and the remaining provisions will continue in full force and effect.
+
+    2. **Entire Agreement**: The Agreement constitutes the entire agreement between you and Midnight regarding the Glacier Drop Program and Tokens and supersede all prior and contemporaneous understandings, agreements, representations, and warranties, both written and oral, regarding the Glacier Drop Program and Tokens. You and Midnight acknowledge that in entering into these Token End-User Terms, you and/or Midnight do not rely on any statement, representation, warranty or understanding other than those expressly set out in these Token End-User Terms.
+
+    3. **Languages.** The English version of these Token End-User Terms will be the binding version and all communications, notices, and other actions and proceedings relating to these Token End-User Terms will be made and conducted in English, even if we choose to provide translations of these Token End-User Terms into the native languages in certain countries. To the extent allowed by law, any inconsistencies among the different translations will be resolved in favour of the English version.
+
+    4. **Assignment.** The ability to participate in the Glacier Drop Program and the Tokens are personal to you, and you must not assign your rights or transfer your responsibilities under these Token End-User Terms to anyone without our prior written consent. This is necessary, including for reasons relating to our compliance with applicable law. We may delegate our responsibilities under these Token End-User Terms, to any third party that is capable of performing these Token End-User Terms competently and in accordance with these Token End-User Terms, our Privacy Policy and applicable law. We may assign our rights under these Token End-User Terms to another business without your consent, but we will notify you of the assignment and ensure that you are not adversely affected as a result.
+
+    5. **Waiver.** Our failure to assert a right or provision under these Token End-User Terms will not constitute a waiver of such right or provision.
+
+    6. **Headings.** Any heading, caption, or section title contained is inserted only as a matter of convenience and in no way defines or explains any section or provision hereof.
+
+13. **ARBITRATION AND CLASS ACTION WAIVER**
+
+    1. **THIS SECTION 13 ONLY APPLIES IF YOU RESIDE IN THE UNITED STATES.**
+
+    2. **PLEASE READ THIS SECTION CAREFULLY  IT MAY SIGNIFICANTLY AFFECT YOUR LEGAL RIGHTS, INCLUDING YOUR RIGHT TO FILE A LAWSUIT IN COURT AND TO HAVE A JURY HEAR YOUR CLAIMS. IT CONTAINS PROCEDURES FOR MANDATORY BINDING ARBITRATION AND A CLASS ACTION WAIVER.**
+
+    3. **Informal process first**. You and Midnight agree that in the event of any dispute between you and Midnight, either party will first contact the other party and make a good faith sustained effort to resolve the dispute before resorting to more formal means of resolution, including without limitation, any arbitration or court action, after first allowing the receiving party thirty (30) days in which to respond. Both you and Midnight agree that this dispute resolution procedure is a condition precedent which must be satisfied before initiating any arbitration or court action against the other party.
+
+    4. **Arbitration agreement and class action waiver**. After the informal dispute resolution process, and subject to the exceptions in Section 13.7 below, any remaining dispute, controversy, or claim (collectively, "**Dispute**") relating in any way to these Token End-User Terms, the Website, the Glacier Drop Program, the Tokens or Midnight's services and/or products, and any use or access or lack of access thereto, will be resolved by arbitration, including threshold questions of arbitrability of the Dispute. You and Midnight agree that any Dispute will be settled by final and binding arbitration, using the English language, administered by JAMS under its Comprehensive Arbitration Rules and Procedures (the "**JAMS Rules**") and, if applicable, Mass Arbitration Procedures and Guidelines then in effect (those rules are deemed to be incorporated by reference into this section, and as of the date of these Token End-User Terms). The JAMS Rules and Mass Arbitration Procedures and Guidelines are both available at [https://www.jamsadr.com](https://www.jamsadr.com).
+
+    5. **Governing law and other procedures**: Because your contract with Midnight, these Token End-User Terms, and this arbitration agreement concern interstate commerce, the Federal Arbitration Act ("**FAA**") governs the arbitrability of all disputes. However, the arbitrator will apply applicable substantive law consistent with the FAA and the applicable statute of limitations or condition precedent to suit. **Arbitration will be handled by a sole arbitrator in accordance with the JAMS Rules. Judgment on the arbitration award may be entered in any court that has jurisdiction.**
+
+    6. **NOTICE REGARDING MASS ARBITRATION**: In accordance with the JAMS Mass Arbitration Procedures and Guidelines, a "**Mass Arbitration**" is defined as seventy-five (75) or more similar demands for arbitration filed against the same party or related parties by individual claimants represented by either the same law firm or law firms acting in coordination. For the avoidance of doubt, a Mass Arbitration will be administered in accordance with the JAMS Mass Arbitration Procedures and Guidelines, except as modified by these Token End-User Terms. As indicated, the JAMS Mass Arbitration Procedures and Guidelines are available at [https://www.jamsadr.com](https://www.jamsadr.com). In a Mass Arbitration, JAMS may designate a process administrator to hear and determine preliminary and administrative matters. The process administrator shall determine such preliminary and administrative matters as may be necessary to ensure the orderly and efficient resolution of the claims brought in the Mass Arbitration, consistent with these Token End-User Terms, procedural fairness, and the integrity of the arbitration process. You and Midnight agree that (a) the JAMS Mass Arbitration Procedures and Guidelines are intended to facilitate the fair, expeditious, and efficient resolution of Mass Arbitrations, and (b) the focus of these procedures is on leveraging administrative and procedural decision-making to set a procedure for the hearing of the Mass Arbitration claims by the arbitrator(s), consistent with the core arbitration values of efficiency and fairness. The JAMS Mass Arbitration Procedures and Guidelines do not include mandatory mediation or test cases. You and Midnight agree that the JAMS Mass Arbitration Procedures and Guidelines do not convert traditional, individual, bilateral arbitrations into representative or class arbitrations. **You understand that by agreeing to these Token End-User Terms, you and Midnight are each waiving the right to trial by jury and agree that you and Midnight may bring claims against each other only in an individual capacity, and not as a plaintiff or class member in any purported class proceeding.**
+
+    7. **Exceptions**. Notwithstanding the foregoing, you and Midnight agree that the following types of disputes will be resolved in a court of proper jurisdiction:
+
+        1. disputes or claims within the jurisdiction of a small claims court consistent with the jurisdictional and dollar limits that may apply, as long as it is brought and maintained as an individual dispute and not as a class, representative, or consolidated action or proceeding;
+
+        2. disputes or claims where the sole form of relief sought is injunctive relief (including public injunctive relief); or
+
+        3. intellectual property disputes.
+
+    8. **Costs of arbitration**. Payment of all filing, administration, and arbitrator costs and expenses will be governed by the JAMS Rules, except that if you demonstrate that any such costs and expenses owed by you under those rules would be prohibitively more expensive than a court proceeding, Midnight will pay the amount of any such costs and expenses that the arbitrator determines are necessary to prevent the arbitration from being prohibitively more expensive than a court proceeding (subject to possible reimbursement as set forth below).
+
+        Fees and costs may be awarded as provided pursuant to applicable law. If the arbitrator finds that either the substance of your claim or the relief sought in the demand is frivolous or brought for an improper purpose (as measured by the standards set forth in Federal Rule of Civil Procedure 11(b)), then the payment of all fees will be governed by the JAMS Rules. In that case, you agree to reimburse Midnight for all monies previously disbursed by it that are otherwise your obligation to pay under the applicable rules. If you prevail in the arbitration and are awarded an amount that is less than the last written settlement amount offered by Midnight before the arbitrator was appointed, Midnight will pay you the amount it offered in settlement. The arbitrator may make rulings and resolve disputes as to the payment and reimbursement of fees or expenses at any time during the proceeding and upon request from either party made within fourteen (14) days of the arbitrator's ruling on the merits.
+
+    9. **Opt-out**. **You have the right to opt-out and not be bound by the arbitration provision and class action waiver set forth in this Section 13 of these Token End-User Terms by sending written notice of your decision to opt-out to [legal@midnighttge.io](mailto:legal@midnighttge.io). The notice must be sent to Midnight within thirty (30) days of your agreement to these Token End-User Terms; otherwise, you shall be bound to arbitrate disputes in accordance with these Token End-User Terms. If you opt out of only the arbitration provision, and not also the class action waiver, the class action waiver still applies. You may not opt out of only the class action waiver and not also the arbitration provision. If you opt-out of these provisions, Midnight also will not be bound by them.**
+
+    10. **WAIVER OF RIGHT TO BRING CLASS ACTION AND REPRESENTATIVE CLAIMS**. To the fullest extent permitted by applicable law, you and Midnight each agree that any proceeding to resolve any dispute, claim, or controversy under these Token End-User Terms will be brought and conducted ONLY IN THE RESPECTIVE PARTY'S INDIVIDUAL CAPACITY AND NOT AS PART OF ANY CLASS (OR PURPORTED CLASS), MULTIPLE-PLAINTIFF, OR REPRESENTATIVE ACTION OR PROCEEDING ("**CLASS ACTION**"). You and Midnight AGREE TO WAIVE THE RIGHT TO PARTICIPATE AS A PLAINTIFF OR CLASS MEMBER IN ANY CLASS ACTION. You and Midnight EXPRESSLY WAIVE ANY ABILITY TO MAINTAIN A CLASS ACTION IN ANY FORUM. For the avoidance of doubt, however, you can seek public injunctive relief to the extent authorised by law and consistent with Section 13.7 (Exceptions) above.
+
+    IF THIS CLASS ACTION WAIVER IS LIMITED, VOIDED, OR FOUND UNENFORCEABLE, THEN, UNLESS THE PARTIES MUTUALLY AGREE OTHERWISE, THE PARTIES' AGREEMENT TO ARBITRATE SHALL BE NULL AND VOID WITH RESPECT TO SUCH PROCEEDING SO LONG AS THE PROCEEDING IS PERMITTED TO PROCEED AS A CLASS ACTION. If a court decides that the limitations of this Section 13 are deemed invalid or unenforceable, any putative class, private attorney general, or consolidated or representative action must be brought in a court of proper jurisdiction and not in arbitration.
+
+14. **GOVERNING LAW AND DISPUTE RESOLUTION**
+
+    1. These Token End-User Terms will be governed and construed in accordance with the laws of the British Virgin Islands, without regard to conflict-of-law provisions. Any additional, mandatory consumer rights and protections that you are entitled to under the laws of the country in which you reside will also apply. If you reside in the United States, please refer to Section 13 (Arbitration and Class Action Waiver) above.
+
+    2. Any claim or dispute between you and us arising in connection with these Token End-User Terms shall be subject to the jurisdiction of the courts of the British Virgin Islands, or, if you don't reside in the British Virgin Islands, you may bring a claim in your local courts from the country where you reside (for example, if you reside in the European Economic Area or the United Kingdom). If you reside in the United States, please refer to Section 13 (Arbitration and Class Action Waiver) above."#;
+
+    let mut hasher = Blake2b::<U28>::new();
+    hasher.update(content.as_bytes());
+    let result = hasher.finalize();
+    let hash_hex = hex::encode(&result);
+    
+    println!("Content length: {} bytes", content.len());
+    println!("Computed hash: {}", hash_hex);
+    println!("Expected hash: 281ba5f69f4b943e3fb8a20390878a232787a04e4be22177f2472b63df01c200");
+    println!("Match: {}", hash_hex == "281ba5f69f4b943e3fb8a20390878a232787a04e4be22177f2472b63df01c200");
+}
