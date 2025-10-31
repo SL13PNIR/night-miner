@@ -75,7 +75,7 @@ impl MiningCoordinator {
     pub async fn run(&mut self) -> Result<()> {
         info!(
             "Starting mining coordinator for address: {}",
-            self.wallet.get_address()
+            self.wallet.get_primary_address()
         );
 
         loop {
@@ -147,7 +147,7 @@ impl MiningCoordinator {
                 
                 // Check server statistics to see if we already have this solution
                 // (e.g., from a previous run or another miner instance)
-                if let Ok(stats) = self.client.get_statistics(self.wallet.get_address()).await {
+                if let Ok(stats) = self.client.get_statistics(self.wallet.get_primary_address()).await {
                     // If we have crypto_receipts >= challenge_number for day 1, we likely already submitted this
                     // This is a heuristic check - challenges are issued sequentially
                     if current_day == 1 && stats.local.crypto_receipts >= challenge.challenge_number {
@@ -182,7 +182,7 @@ impl MiningCoordinator {
 
                 let mining_result = self.mining_engine.mine(
                     &challenge,
-                    self.wallet.get_address(),
+                    self.wallet.get_primary_address(),
                     Some(self.challenge_timeout),
                 )?;
 
@@ -199,7 +199,7 @@ impl MiningCoordinator {
                             match self
                                 .client
                                 .submit_solution(
-                                    self.wallet.get_address(),
+                                    self.wallet.get_primary_address(),
                                     &challenge.challenge_id,
                                     &nonce_hex,
                                 )

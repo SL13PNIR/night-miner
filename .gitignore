@@ -23,3 +23,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Downloaded cardano-cli artifacts
+cardano-cli.zip
+*.dll
+share/
+
+# Test wallets
+test-wallet/
+test-wallets/
+demo-wallet.json

@@ -81,6 +81,38 @@ Create a `wallet.json` file with your Cardano address:
 
 **Note:** The `signing_key` field is not used since we sign externally with your wallet. The `verification_key` is your wallet's public key.
 
+### Multi-Address Mining (New!)
+
+You can now mine with multiple addresses from the same wallet in a single miner instance! This is more efficient than running multiple separate instances.
+
+Add an `addresses` array to your `wallet.json`:
+
+```json
+{
+  "address": "addr1qx...",
+  "signing_key": "NOT_USED_EXTERNALLY_SIGNED",
+  "verification_key": "YOUR_VERIFICATION_KEY_HERE",
+  "addresses": [
+    "addr1qy...",
+    "addr1qz..."
+  ]
+}
+```
+
+The miner will:
+1. Mine the current challenge with the primary `address`
+2. If a solution is found quickly, automatically mine with the next address
+3. Continue rotating through addresses until the challenge times out
+4. Maximize your solutions per challenge without running multiple processes
+
+**Benefits:**
+- More efficient resource usage (single ROM initialization per challenge)
+- Automatic rotation based on time remaining
+- Simpler to manage than multiple miner instances
+- Each address gets tracked separately for "already submitted" checks
+
+**Note:** You must register each address individually before mining with it.
+
 ## Mining
 
 Once registered, start mining:

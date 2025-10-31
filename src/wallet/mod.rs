@@ -1,142 +1,134 @@
-use anyhow::{Context, Result};
+﻿use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, info};
+use std::process::Command;
+use tracing::info;
 
-/// Wallet configuration for signing messages
+/// Individual address entry in the wallet
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressEntry {
+    pub address: String,
+    pub verification_key: String,
+}
+
+/// Wallet configuration with multiple addresses
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
-    pub address: String,
-    pub signing_key: String,      // Hex-encoded private key
-    pub verification_key: String, // Hex-encoded public key (short form, 64 chars)
+    pub addresses: Vec<AddressEntry>,
 }
 
 impl WalletConfig {
-    /// Load wallet configuration from a JSON file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path.as_ref())
             .context("Failed to read wallet configuration file")?;
-
         let config: WalletConfig =
             serde_json::from_str(&contents).context("Failed to parse wallet configuration")?;
-
-        info!(
-            "Loaded wallet configuration for address: {}",
-            config.address
-        );
+        if config.addresses.is_empty() {
+            anyhow::bail!("Wallet must have at least one address");
+        }
+        info!("Loaded wallet configuration with {} address(es)", config.addresses.len());
+        for (i, entry) in config.addresses.iter().enumerate() {
+            info!("  [{}] {}", i, entry.address);
+        }
         Ok(config)
     }
 
-    /// Save wallet configuration to a JSON file
     pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let contents = serde_json::to_string_pretty(self)
             .context("Failed to serialize wallet configuration")?;
-
         fs::write(path.as_ref(), contents).context("Failed to write wallet configuration file")?;
-
         info!("Saved wallet configuration to: {:?}", path.as_ref());
         Ok(())
     }
 
-    /// Get the short-form public key (64 hex characters)
-    pub fn get_pubkey(&self) -> &str {
-        &self.verification_key
+    pub fn get_primary_address(&self) -> &str {
+        &self.addresses[0].address
     }
-
-    /// Get the Cardano address
-    pub fn get_address(&self) -> &str {
-        &self.address
+    
+    pub fn get_primary_pubkey(&self) -> &str {
+        &self.addresses[0].verification_key
+    }
+    
+    pub fn get_addresses(&self) -> &[AddressEntry] {
+        &self.addresses
+    }
+    
+    pub fn address_count(&self) -> usize {
+        self.addresses.len()
+    }
+    
+    pub fn get_pubkey_for_address(&self, address: &str) -> Option<&str> {
+        self.addresses
+            .iter()
+            .find(|entry| entry.address == address)
+            .map(|entry| entry.verification_key.as_str())
     }
 }
 
-/// Sign a message using CIP-8/30 standard
-///
-/// This creates a COSE_Sign1 structure as required by the Cardano ecosystem
-#[allow(dead_code)]
-pub fn sign_message(message: &str, wallet: &WalletConfig) -> Result<String> {
-    debug!("Signing message: {}", message);
-
-    // In a production environment, you would use proper Cardano signing libraries
-    // This is a placeholder that shows the structure needed
-
-    // For now, we'll return a note that external signing is required
-    // In practice, you'd use cardano-cli, a hardware wallet, or cardano-serialization-lib
-
-    anyhow::bail!(
-        "Message signing requires external wallet integration.\n\
-        Please use cardano-cli or your wallet software to sign the following message:\n\
-        Message: {}\n\
-        Address: {}\n\
-        \n\
-        Example using cardano-cli:\n\
-        cardano-cli address key-sign \\\n\
-          --signing-key-file payment.skey \\\n\
-          --address {} \\\n\
-          --message '{}' \\\n\
-          --out-file signature.json",
-        message,
-        wallet.address,
-        wallet.address,
-        message
-    );
+pub fn sign_message_with_key<P: AsRef<Path>>(message: &str, address: &str, signing_key_path: P) -> Result<String> {
+    use cardano_serialization_lib::PrivateKey;
+    use serde_cbor::Value as CborValue;
+    let key_content = fs::read_to_string(signing_key_path.as_ref()).context("Failed to read signing key file")?;
+    let key_json: serde_json::Value = serde_json::from_str(&key_content).context("Failed to parse signing key JSON")?;
+    let cbor_hex = key_json["cborHex"].as_str().context("Missing cborHex field in signing key")?;
+    let cbor_bytes = hex::decode(cbor_hex).context("Failed to decode cborHex")?;
+    let private_key = PrivateKey::from_normal_bytes(&cbor_bytes[2..34]).map_err(|e| anyhow::anyhow!("Failed to parse private key: {:?}", e))?;
+    let payload_text = if message.starts_with('{') { message.to_string() } else { format!("\"{}\"", message) };
+    let payload = format!("{{\"hashed\":{}}}", payload_text);
+    let (_, addr_data) = bech32::decode(address).map_err(|e| anyhow::anyhow!("Failed to decode bech32 address: {}", e))?;
+    let addr_bytes = addr_data;
+    let signature = private_key.sign(payload.as_bytes());
+    let signature_bytes = signature.to_bytes();
+    let protected = {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(CborValue::Integer(1), CborValue::Integer(-8));
+        map.insert(CborValue::Integer(4), CborValue::Bytes(addr_bytes[1..29].to_vec()));
+        serde_cbor::to_vec(&CborValue::Map(map))?
+    };
+    let unprotected = {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(CborValue::Text("address".to_string()), CborValue::Text(address.to_string()));
+        CborValue::Map(map)
+    };
+    let cose_sign1 = CborValue::Array(vec![
+        CborValue::Bytes(protected),
+        unprotected,
+        CborValue::Bytes(payload.as_bytes().to_vec()),
+        CborValue::Bytes(signature_bytes.to_vec()),
+    ]);
+    let signature_cbor = serde_cbor::to_vec(&cose_sign1)?;
+    Ok(hex::encode(signature_cbor))
 }
 
-/// Verify that a signature matches the expected format
-#[allow(dead_code)]
-pub fn verify_signature_format(signature: &str) -> Result<()> {
-    // CIP-8/30 signatures are CBOR-encoded COSE_Sign1 structures
-    // They should be hex-encoded and start with specific bytes
-
-    let sig_bytes = hex::decode(signature).context("Signature must be valid hex")?;
-
-    // COSE_Sign1 structures typically start with 0x84 (CBOR array of 4 elements)
-    // or 0x85 (CBOR array of 5 elements)
-    if sig_bytes.is_empty() {
-        anyhow::bail!("Signature is empty");
+pub fn derive_address_from_key<P: AsRef<Path>>(signing_key_path: P, wallet_dir: P) -> Result<String> {
+    let skey_path = signing_key_path.as_ref();
+    let vkey_path = skey_path.with_extension("vkey");
+    if !vkey_path.exists() {
+        anyhow::bail!("Verification key file not found: {:?}", vkey_path);
     }
-
-    if sig_bytes[0] != 0x84 && sig_bytes[0] != 0x85 {
-        anyhow::bail!("Signature does not appear to be a valid COSE_Sign1 structure");
+    let wallet_dir = wallet_dir.as_ref();
+    let stake_vkey = if let Ok(entries) = std::fs::read_dir(wallet_dir) {
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension().map_or(false, |ext| ext == "vkey")
+                    && path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map_or(false, |s| s.ends_with("-stake"))
+            })
+    } else {
+        None
+    };
+    let stake_vkey = stake_vkey.context("Stake verification key not found. Expected a file ending with -stake.vkey")?;
+    info!("Using stake key: {:?}", stake_vkey);
+    let output = Command::new("cardano-cli")
+        .args(&["address", "build", "--payment-verification-key-file", vkey_path.to_str().unwrap(), "--stake-verification-key-file", stake_vkey.to_str().unwrap(), "--mainnet"])
+        .output()
+        .context("Failed to execute cardano-cli")?;
+    if !output.status.success() {
+        anyhow::bail!("Failed to derive address: {}", String::from_utf8_lossy(&output.stderr));
     }
-
-    debug!("Signature format appears valid");
-    Ok(())
-}
-
-/// Create a donation message for signing
-#[allow(dead_code)]
-pub fn create_donation_message(destination_address: &str) -> String {
-    format!(
-        "Assign accumulated Scavenger rights to: {}",
-        destination_address
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_donation_message_format() {
-        let addr = "addr1qq4dl3nhr0axurgcrpun9xyp04pd2r2dwu5x7eeam98psv6dhxlde8ucclv2p46hm077ds4vzelf5565fg3ky794uhrq5up0he";
-        let message = create_donation_message(addr);
-        assert_eq!(
-            message,
-            format!("Assign accumulated Scavenger rights to: {}", addr)
-        );
-    }
-
-    #[test]
-    fn test_verify_signature_format_valid() {
-        // Example signature from documentation
-        let sig = "845882a30127045839001c2e057143337716055394074256b79df7fc36051802ccefc1b2d3bf2a77372b1cff16a2cfe1e9a634bfaae3c74e8c8188e6043f572295f067616464726573735839001c2e057143337716055394074256b79df7fc36051802ccefc1b2d3bf2a77372b1cff16a2cfe1e9a634bfaae3c74e8c8188e6043f572295f0a166686173686564f458b34920616772656520746f20616269646520627920746865207465726d7320616e6420636f6e646974696f6e732061732064657363726962656420696e2076657273696f6e20312d30206f6620746865204d69646e696768742073636176656e676572206d696e696e672070726f636573733a206665666533366266386535666234363136636335363861386437626132306162373063616266326538376238663836616563623936623032643833656434386665584050a01e23e3a6cefcb93901af88f9873421fa76f75f98d7d0c7b43b3bdf09676921d7ee326f3bf1061fea4c62e07b84b9fdd1e17cd5d52790a7c1a0fce99e80e";
-        assert!(verify_signature_format(sig).is_ok());
-    }
-
-    #[test]
-    fn test_verify_signature_format_invalid() {
-        let sig = "invalid";
-        assert!(verify_signature_format(sig).is_err());
-    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
