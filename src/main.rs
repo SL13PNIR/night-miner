@@ -1313,14 +1313,12 @@ async fn main() -> Result<()> {
                             
                             // Check if all addresses have submitted for this challenge
                             if wallet.challenge_submissions[&challenge_id].len() >= wallet.addresses.len() {
-                                // All addresses used, check if we have time to create a new one
-                                let time_until_next = (next_challenge_starts_at.timestamp() - chrono::Utc::now().timestamp()).max(0);
+                                // All addresses used, create a new one
+                                // Note: We don't check the countdown timer because challenges don't 
+                                // transition exactly at 0:00 - they can start late. Better to keep mining!
+                                println!("\n🔄 All addresses have solutions. Creating new address...");
                                 
-                                // Need at least 30s to create, register, and mine
-                                if time_until_next > 30 {
-                                    println!("\n🔄 All addresses have solutions. Creating new address...");
-                                    
-                                    // Create and register new address
+                                // Create and register new address
                                     let name = format!("addr-{}", address_counter);
                                     println!("\n📝 Creating address: {}", name);
 
@@ -1438,11 +1436,6 @@ async fn main() -> Result<()> {
                                             }
                                         }
                                     }
-                                } else {
-                                    println!("\n⏰ All addresses used, not enough time for new address.");
-                                    println!("   Waiting {} seconds for next challenge...", time_until_next);
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(time_until_next as u64 + 5)).await;
-                                    continue 'mining_loop;
                                 }
                             } else {
                                 // Skip addresses that already submitted
