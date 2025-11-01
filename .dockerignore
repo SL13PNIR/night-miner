@@ -1,0 +1,43 @@
+# Ignore Docker-related files
+.dockerignore
+docker-compose.override.yml
+
+# Docker volumes
+auto-mine-wallet/
+
+# Target directory (will be built inside container)
+target/
+
+# Rust compilation artifacts
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+LICENSE-*
+
+# Test files
+test.ps1
+build.ps1
+
+# Examples
+examples/
+
+# Benchmarks
+benches/
+
+# Config examples
+config.example.toml
+wallet.example.json

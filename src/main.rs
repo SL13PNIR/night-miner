@@ -190,9 +190,9 @@ enum Commands {
         #[arg(short, long)]
         threads: Option<usize>,
 
-        /// Challenge timeout in minutes
-        #[arg(short = 't', long, default_value = "55")]
-        timeout: u64,
+        /// Challenge timeout in minutes (optional - runs indefinitely if not specified)
+        #[arg(short = 't', long)]
+        timeout: Option<u64>,
     },
 }
 
@@ -1079,7 +1079,13 @@ async fn main() -> Result<()> {
             println!("  3. Mine with first address until solution found");
             println!("  4. Rotate to next existing address (if available)");
             println!("  5. Create new address only when all have solutions");
-            println!("  6. Restart from first address on new challenge\n");
+            println!("  6. Restart from first address on new challenge");
+            if let Some(t) = timeout {
+                println!("  ⏰ Timeout: {} minutes", t);
+            } else {
+                println!("  ♾️  No timeout - will run indefinitely");
+            }
+            println!();
 
             // Find cardano-cli
             let cli_paths = vec![
@@ -1259,17 +1265,19 @@ async fn main() -> Result<()> {
 
             // Main mining loop
             let start_time = std::time::Instant::now();
-            let timeout_duration = std::time::Duration::from_secs(timeout * 60);
+            let timeout_duration = timeout.map(|t| std::time::Duration::from_secs(t * 60));
             
             // Create mining engine once (will reuse ROM across addresses)
             let mut mining_engine = miner::MiningEngine::new(threads).with_progress_bar(true);
             let mut current_challenge_id: Option<String> = None;
             
             'mining_loop: loop {
-                // Check if we've exceeded the challenge timeout
-                if start_time.elapsed() >= timeout_duration {
-                    println!("\n⏰ Challenge timeout reached. Exiting...");
-                    break 'mining_loop;
+                // Check if we've exceeded the challenge timeout (only if timeout is specified)
+                if let Some(timeout_dur) = timeout_duration {
+                    if start_time.elapsed() >= timeout_dur {
+                        println!("\n⏰ Challenge timeout reached. Exiting...");
+                        break 'mining_loop;
+                    }
                 }
 
                 // Get current challenge with retry logic
@@ -1448,10 +1456,15 @@ async fn main() -> Result<()> {
                         let current_address = &wallet.addresses[current_address_index].address;
                         let difficulty_level = miner::difficulty_to_level(&challenge.difficulty);
                         
+                        // Calculate total solutions across all challenges
+                        let total_solutions: usize = wallet.challenge_submissions.values().map(|v| v.len()).sum();
+                        let used_this_challenge = wallet.challenge_submissions.get(&challenge_id).map(|v| v.len()).unwrap_or(0);
+                        
                         println!("\n🎯 Day {}/{} - Challenge {}", current_day, max_day, challenge.challenge_id);
                         println!("   Difficulty: {} ({})", challenge.difficulty, difficulty_level);
                         println!("   Mining with address {}: {}", current_address_index, current_address);
-                        println!("   Addresses: {} created, {} used this challenge", wallet.addresses.len(), wallet.challenge_submissions[&challenge_id].len());
+                        println!("   Addresses: {} created | This challenge: {} used | Total solutions: {}", 
+                                 wallet.addresses.len(), used_this_challenge, total_solutions);
 
                         // Initialize ROM only if this is a new challenge (ROM is challenge-specific, not address-specific)
                         if current_challenge_id.as_ref() != Some(&challenge.challenge_id) {
@@ -1463,11 +1476,11 @@ async fn main() -> Result<()> {
                         }
                         
                         println!("\n⛏️  Mining...");
-                        let remaining_time = timeout_duration.saturating_sub(start_time.elapsed());
+                        let remaining_time = timeout_duration.map(|timeout_dur| timeout_dur.saturating_sub(start_time.elapsed()));
                         let mining_result = mining_engine.mine(
                             &challenge,
                             current_address,
-                            Some(remaining_time),
+                            remaining_time,
                         )?;
 
                         match mining_result {
