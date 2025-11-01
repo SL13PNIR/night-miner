@@ -1,6 +1,6 @@
 [package]
 name = "night-miner"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["NIGHT Miner"]
 description = "Optimized miner for NIGHT token Scavenger Mine program"
