@@ -81,9 +81,9 @@ Successfully registered address: addr1q...
 Receipt timestamp: 2025-10-30 13:01:17.983 UTC
 ```
 
-## Configuration
+### Manual Mode Configuration
 
-Create a `wallet.json` file with your Cardano address:
+**For manual mining only**, create a `wallet.json` file with your Cardano address:
 
 ```json
 {
@@ -95,9 +95,13 @@ Create a `wallet.json` file with your Cardano address:
 
 **Note:** The `signing_key` field is not used since we sign externally with your wallet. The `verification_key` is your wallet's public key.
 
-### Wallet Structure and File Organization
+---
 
-AutoMine creates an `auto-mine-wallet/` directory containing all wallet files:
+## AutoMine Wallet Structure (Automatic)
+
+**AutoMine creates everything automatically** - you don't need to create any files manually!
+
+When you run AutoMine, it automatically creates an `auto-mine-wallet/` directory containing all wallet files:
 
 ```
 auto-mine-wallet/
@@ -128,8 +132,8 @@ auto-mine-wallet/
     }
   ],
   "challenge_submissions": {
-    "**D02C22": [0, 1, 2, 3, 4],
-    "**D02C23": [0, 1, 2]
+    "**D02C22": [0, 1, 2, 3, 4],  // Challenge ID format: **D{day}C{challenge}
+    "**D02C23": [0, 1, 2]          // Tracks address indices that submitted
   }
 }
 ```
@@ -231,6 +235,8 @@ cp -r auto-mine-wallet "auto-mine-wallet-backup-$(date +%Y-%m-%d-%H%M)"
 
 ### AutoMine (Recommended) 🚀
 
+**No manual setup required!** AutoMine creates everything automatically - just run the command and start mining.
+
 The **AutoMine** feature is the easiest and most efficient way to mine. It automatically:
 - Creates and manages wallet addresses
 - Registers new addresses as needed
@@ -243,10 +249,16 @@ The **AutoMine** feature is the easiest and most efficient way to mine. It autom
 **Start AutoMining:**
 
 ```bash
-# Windows
+# Windows (run indefinitely - recommended)
+.\target\release\night-miner.exe auto-mine --threads 16
+
+# Windows (run for 2 hours then stop)
 .\target\release\night-miner.exe auto-mine --threads 16 --timeout 120
 
-# Linux/Mac
+# Linux/Mac (run indefinitely - recommended)
+./target/release/night-miner auto-mine --threads 16
+
+# Linux/Mac (run for 2 hours then stop)
 ./target/release/night-miner auto-mine --threads 16 --timeout 120
 ```
 
@@ -309,7 +321,7 @@ If you prefer to mine with a single address or have pre-registered addresses, yo
 **AutoMine:**
 - `--output-dir <DIR>`: Wallet directory (default: `auto-mine-wallet`)
 - `--threads <N>`: Number of mining threads (default: CPU count)
-- `--timeout <MINUTES>`: Challenge timeout in minutes (default: 55)
+- `--timeout <MINUTES>`: Optional timeout in minutes (runs indefinitely if not specified)
 - `--network <mainnet|testnet>`: Network (default: `mainnet`)
 
 **Manual Mining:**
@@ -331,7 +343,7 @@ If you prefer to mine with a single address or have pre-registered addresses, yo
 🎯 Day 2/21 - Challenge **D02C23
    Difficulty: 0001FFFF (Extreme)
    Mining with address 37: addr1qy...
-   Addresses: 113 created, 82 used this challenge
+   Addresses: 113 created | This challenge: 82 used | Total solutions: 543
 ♻️ Reusing ROM from previous challenge
 
 ⛏️  Mining...
