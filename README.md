@@ -119,7 +119,6 @@ Mining with generated address 0: addr1qywn...
 ⛏️  Mining...
 ✅ Solution found! Nonce: 0100019a470bb2e7 | Time: 14.14s
 ✅ Solution submitted successfully!
-```
 
 ## FAQ
 
