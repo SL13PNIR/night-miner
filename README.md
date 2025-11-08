@@ -7,7 +7,7 @@ High-performance automated miner for the NIGHT Token Scavenger Mine program.
 ## Installation
 
 **Download the Binary**
-- Download `night-miner.zip` from the [releases](https://github.com/SL13PNIR/night-miner/releases/tag/v0.1.0) page
+- Download `night-miner.zip` from the [releases](https://github.com/SL13PNIR/night-miner/releases/) page
 - Extract to a folder where you want to mine
 - Windows only (`.exe` file)
 
