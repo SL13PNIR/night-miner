@@ -117,18 +117,46 @@ $env:RUST_LOG="debug"
 Shows: Everything including hash attempts, preimage construction, ROM initialization, thread operations
 
 **Module-Specific Logging:**
+
+You can target specific modules for focused debugging. Here's the complete list of available modules:
+
 ```powershell
-# Debug wallet operations only
-$env:RUST_LOG="night_miner::wallet=debug,night_miner=info"
+# Core modules
+$env:RUST_LOG="night_miner::api=debug,night_miner=info"                    # API client (challenges, submissions)
+$env:RUST_LOG="night_miner::wallet=debug,night_miner=info"                 # Wallet loading and management
+$env:RUST_LOG="night_miner::address_manager=debug,night_miner=info"        # Address rotation and tracking
+$env:RUST_LOG="night_miner::challenge_manager=debug,night_miner=info"      # Challenge queue management
+$env:RUST_LOG="night_miner::dev_payment_tracker=debug,night_miner=info"    # Developer payment tracking
+$env:RUST_LOG="night_miner::miner=debug,night_miner=info"                  # Mining engine (very verbose!)
+$env:RUST_LOG="night_miner::pending_submissions=debug,night_miner=info"    # Submission cache
+$env:RUST_LOG="night_miner::star_value_cache=debug,night_miner=info"       # STAR rate caching
+$env:RUST_LOG="night_miner::terms=debug,night_miner=info"                  # Terms acceptance
 
-# Debug challenge manager
-$env:RUST_LOG="night_miner::challenge_manager=debug,night_miner=info"
+# Operations modules
+$env:RUST_LOG="night_miner::operations::mining=debug,night_miner=info"              # Mining loop
+$env:RUST_LOG="night_miner::operations::registration=debug,night_miner=info"        # Address registration
+$env:RUST_LOG="night_miner::operations::solution_submitter=debug,night_miner=info"  # Solution submission
+$env:RUST_LOG="night_miner::operations::signing=debug,night_miner=info"             # Transaction signing
 
-# Debug solution submissions
-$env:RUST_LOG="night_miner::operations::solution_submitter=debug,night_miner=info"
+# Combine multiple modules for detailed debugging
+$env:RUST_LOG="night_miner::api=debug,night_miner::challenge_manager=debug,night_miner=info"
+$env:RUST_LOG="night_miner::address_manager=debug,night_miner::dev_payment_tracker=debug,night_miner=info"
+```
 
-# Multiple modules
-$env:RUST_LOG="night_miner::api=debug,night_miner::wallet=debug,night_miner=info"
+**Most Useful Combinations:**
+
+```powershell
+# Troubleshoot API and network issues
+$env:RUST_LOG="night_miner::api=debug,night_miner::operations::solution_submitter=debug,night_miner=info"
+
+# Debug address management and developer payments
+$env:RUST_LOG="night_miner::address_manager=debug,night_miner::dev_payment_tracker=debug,night_miner=info"
+
+# Monitor challenge selection and mining flow
+$env:RUST_LOG="night_miner::challenge_manager=debug,night_miner::operations::mining=debug,night_miner=info"
+
+# Full registration debugging
+$env:RUST_LOG="night_miner::operations::registration=debug,night_miner::wallet=debug,night_miner=info"
 ```
 
 ### What You'll See With API Debug Logging
@@ -277,32 +305,19 @@ When the claiming period opens, you'll need:
 - Automatic migration from older `.priority` payment tracking system
 
 **Transparency:**
-- Mining display shows current stats: `Address #1 | This addr: 44 sols | Your total: 5146 | Dev: 2 (0.0%)`
+- Mining display shows current stats: `Your total: 45 | Dev: 5 (10.0%)`
 - Status message when dev payment delayed: `Dev payment delayed (ratio: 10.0%)`
 - Full statistics available via detailed stats output
 
 ### Example Output
 
 ```
-🔗 Connecting to mining server...
-📥 Cached challenge **D11C24 (Day 11, Difficulty: 000007FF)
-   ✅ Challenge added to queue (1 available)
-
-🆕 New challenge detected: **D11C24
-   💎 Developer payment pending for this challenge
-⛏️  Mining: 🎯 DEVELOPER ADDRESS
-⠁ [00:09:32] Hashes: 4052000 | Rate: 7121.80 H/s
-
-✅ Solution found! Nonce: 0a00019a6afc1a78
-   ✅ Marked developer address as used for challenge **D11C24
-📤 Submitting solution...
-   ✅ Solution submitted successfully!
-   💰 Estimated Current earnings: 11281.250418 NIGHT
-
-🔄 Switching to generated address 0
-📋 Challenge **D11C24 | Day 11/21 | ROM cached ✅
-⛏️  Mining: Address #1 | This addr: 44 sols | Your total: 5146 | Dev: 2 (0.0%)
-  [00:11:49] Hashes: 632000 | Rate: 9230.46 H/s
+Mining with smart challenge selection enabled
+📊 Challenge #19 (Day 11) - Difficulty: 000007FF (easiest)
+⛏️  Mining... [16 threads]
+✅ Solution found! Nonce: 0100019a470bb2e7 | Time: 14.14s
+✅ Solution submitted successfully!
+⛏️  Address #3 | Your total: 45 | Dev: 5 (10.0%)
 ```
 
 ## FAQ
@@ -336,6 +351,14 @@ If the `donate_to` endpoint isn't fixed, you'll need to manually claim using:
 2. Import keys into Eternl wallet or use Cardano CLI
 
 **Important:** Keep your `auto-mine-wallet/` backups safe regardless! Even if address consolidation works, you should retain the keys as a safety backup.
+
+## Disclaimer
+
+This software is provided "as is" without warranty. By using this software, you agree to the developer receiving up to 10% of solutions found as fair compensation. This 10% cap is enforced through tamper-resistant tracking. Mining results depend on network conditions, competition, and luck.
+
+---
+
+**Happy Mining! 🌙**
 
 ## Disclaimer
 
