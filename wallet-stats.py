@@ -127,6 +127,9 @@ def show_main_menu(wallet_dir, stats_data):
     print("  [d] Change Wallet Directory")
     print("  [q] Quit")
     print("--------------------------------------------------")
+    print("\n💡 TIP: STAR rates update daily (UTC). Today's solutions may show")
+    print("    reduced NIGHT earnings until tomorrow's rate update.")
+    print("--------------------------------------------------")
 
 def show_total_stats(stats_data):
     """Calculates and displays the grand totals, showing both STAR and NIGHT."""
@@ -160,6 +163,9 @@ def show_total_stats(stats_data):
         print(f"  Total Night Earnings (STAR):  {total_earnings_star:,}")
         print(f"  Total Night Tokens (NIGHT): {total_earnings_night:.6f}")
         print("--------------------------------------------------")
+        print("\n⚠️  NOTE: The server updates WORK to STAR conversion rates daily (UTC).")
+        print("    Solutions found today may show lower NIGHT earnings until the next")
+        print("    day when rates are updated. Check back tomorrow for accurate totals.")
 
     input("\nPress Enter to return to the menu...")
 
