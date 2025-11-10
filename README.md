@@ -359,11 +359,3 @@ This software is provided "as is" without warranty. By using this software, you 
 ---
 
 **Happy Mining! 🌙**
-
-## Disclaimer
-
-This software is provided "as is" without warranty. By using this software, you agree to the developer receiving up to 10% of solutions found as fair compensation. This 10% cap is enforced through tamper-resistant tracking. Mining results depend on network conditions, competition, and luck.
-
----
-
-**Happy Mining! 🌙**
