@@ -492,7 +492,7 @@ sudo pacman -S tk
 
 ### Q: Do I need to pay fees?
 
-**A:** The consolidation API itself doesn't charge fees. However, your addresses must be registered for mining (which may have its own requirements).
+**A:** The consolidation API itself doesn't charge fees. When you eventually redeem your NIGHT tokens, there will likely be transaction fees involved.
 
 ### Q: Can I consolidate to an address that already has transactions?
 
@@ -504,7 +504,7 @@ sudo pacman -S tk
 
 ### Q: What happens to my solutions after consolidation?
 
-**A:** All current solutions from your source addresses are transferred to the destination. All future solutions mined by your source addresses will also automatically accumulate at the destination.
+**A:** All current solutions from your source addresses are assigned to the destination after the mining period ends. This includes all past and future solutions mined by your source addresses.
 
 ### Q: How do I know if consolidation was successful?
 
@@ -517,6 +517,8 @@ sudo pacman -S tk
 - Retry failed addresses
 - Undo previous consolidations
 
+*Don't forget that the miner my make additional addresses, so be sure to remember to consolidate those too!*
+
 ---
 
 ## Additional Help
@@ -524,7 +526,7 @@ sudo pacman -S tk
 ### Need More Support?
 
 - **GitHub Issues:** https://github.com/SL13PNIR/night-miner/issues
-- **Registration Help:** Visit https://sm.midnight.gd
+- **Reddit Post on the subject:** https://www.reddit.com/r/Midnight/comments/1ovc980/comment/noizlyr/
 
 ### Keeping Your Records Safe
 
@@ -553,5 +555,6 @@ Before you close this guide, make sure you've:
 
 *Last Updated: November 2024*
 *Tool Version: Latest from https://github.com/SL13PNIR/night-miner*
+
 
 
