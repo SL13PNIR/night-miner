@@ -536,7 +536,6 @@ class UIManager:
             json_file = record_file.replace('.txt', '.json')
             print(f"\n📁 Consolidation records saved:")
             print(f"   Text file: {record_file}")
-            print(f"   JSON file: {json_file}")
 
         print("\n" + "=" * 70)
 
@@ -1016,4 +1015,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
