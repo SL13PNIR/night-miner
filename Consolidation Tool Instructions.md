@@ -357,9 +357,7 @@ Two files are created for each consolidation session:
    - Consolidation IDs
    - Important notes
 
-2. **JSON File (`.json`)** - Machine-readable format (for advanced users)
-
-**Keep these files safe!** They contain important information about your consolidations.
+**Keep this files safe!** They contain important information about your consolidations.
 
 ---
 
@@ -500,10 +498,6 @@ sudo pacman -S tk
 
 **A:** No. The destination address must be completely unused (0 transactions) on the Cardano blockchain. This is a requirement to ensure clean consolidation.
 
-### Q: What's the difference between the .txt and .json files?
-
-**A:** The `.txt` file is formatted for humans to read easily. The `.json` file contains the same information in a format that programs can read. Keep both for reference.
-
 ### Q: Can I consolidate addresses from different wallets?
 
 **A:** Yes! After consolidating one wallet, the tool will ask if you want to consolidate another. You can use the same destination address for multiple wallets.
@@ -535,7 +529,7 @@ sudo pacman -S tk
 ### Keeping Your Records Safe
 
 After consolidation, make sure to:
-1. Save the consolidation record files (`.txt` and `.json`) to a safe location
+1. Save the consolidation record file (`.txt`) to a safe location
 2. Back them up to cloud storage or external drive
 3. Keep them with your other wallet documentation
 
@@ -559,4 +553,5 @@ Before you close this guide, make sure you've:
 
 *Last Updated: November 2024*
 *Tool Version: Latest from https://github.com/SL13PNIR/night-miner*
+
 
