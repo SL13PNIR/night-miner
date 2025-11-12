@@ -1,863 +1,1019 @@
 #!/usr/bin/env python3
-# ==============================================================================
-# NIGHT Miner Wallet Consolidation Tool
-#
-# How to use this script:
-# 1. Save this file as "consolidate-wallet.py"
-# 2. Make sure you have a wallet folder with address key files (addr-N.addr, 
-#    addr-N.skey files)
-# 3. Run this script from your terminal. It will guide you through the process.
-#
-# IMPORTANT: This tool will consolidate ALL solutions from your wallet addresses
-# to a single destination address. Make sure you understand the process before
-# confirming!
-#
-# The destination address MUST be:
-# - A valid Cardano Shelley receiving address (starts with 'addr1')
-# - UNUSED (no transactions on the blockchain)
-# - Under your control
-# ==============================================================================
+"""
+NIGHT Miner Wallet Consolidation Tool
+
+A tool for consolidating mining solutions from multiple wallet addresses generated with NIGHT miner
+to a single destination address using the donate_to API.
+
+Requirements:
+- Python 3.7+
+- All addresses must be registered at https://sm.midnight.gd
+- Destination address must be unused on Cardano blockchain
+"""
 
 import os
-import sys
 import json
+import time
 import requests
-import subprocess
-from datetime import datetime
-from pathlib import Path
-import re
 import webbrowser
-
-# ==============================================================================
-# Pure Python Bech32 Implementation (No external dependency needed)
-# Based on BIP 173: https://github.com/bitcoin/bips/blob/master/bip-0173.mediawiki
-# ==============================================================================
-
-BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-
-def bech32_polymod(values):
-    """Internal function for Bech32 checksum computation."""
-    GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
-    chk = 1
-    for value in values:
-        b = chk >> 25
-        chk = (chk & 0x1ffffff) << 5 ^ value
-        for i in range(5):
-            chk ^= GEN[i] if ((b >> i) & 1) else 0
-    return chk
-
-def bech32_hrp_expand(hrp):
-    """Expand the HRP into values for checksum computation."""
-    return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
-
-def bech32_verify_checksum(hrp, data, const=1):
-    """Verify a checksum given HRP and converted data characters."""
-    return bech32_polymod(bech32_hrp_expand(hrp) + data) == const
-
-def bech32_decode(bech):
-    """Decode a bech32/bech32m string. Returns (hrp, data) or (None, None) on failure."""
-    if ((any(ord(x) < 33 or ord(x) > 126 for x in bech)) or
-            (bech.lower() != bech and bech.upper() != bech)):
-        return (None, None)
-    bech = bech.lower()
-    pos = bech.rfind('1')
-    if pos < 1 or pos + 7 > len(bech):  # Removed max length check for Cardano addresses
-        return (None, None)
-    if not all(x in BECH32_CHARSET for x in bech[pos+1:]):
-        return (None, None)
-    hrp = bech[:pos]
-    data = [BECH32_CHARSET.find(x) for x in bech[pos+1:]]
-    # Try bech32 (const=1) first, then bech32m (const=0x2bc830a3)
-    if bech32_verify_checksum(hrp, data, 1):
-        return (hrp, data[:-6])  # Remove 6-character checksum
-    elif bech32_verify_checksum(hrp, data, 0x2bc830a3):
-        return (hrp, data[:-6])  # bech32m variant
-    else:
-        return (None, None)  # Checksum failed
-
-def bech32_convertbits(data, frombits, tobits, pad=True):
-    """Convert between bit groups."""
-    acc = 0
-    bits = 0
-    ret = []
-    maxv = (1 << tobits) - 1
-    max_acc = (1 << (frombits + tobits - 1)) - 1
-    for value in data:
-        if value < 0 or (value >> frombits):
-            return None
-        acc = ((acc << frombits) | value) & max_acc
-        bits += frombits
-        while bits >= tobits:
-            bits -= tobits
-            ret.append((acc >> bits) & maxv)
-    if pad:
-        if bits:
-            ret.append((acc << (tobits - bits)) & maxv)
-    elif bits >= frombits or ((acc << (tobits - bits)) & maxv):
-        return None
-    return ret
-
-# ==============================================================================
-# The tkinter library is used for the folder selection pop-up window.
+from enum import Enum
+from pathlib import Path
+from typing import Optional, Tuple, List, Dict, Any
+from dataclasses import dataclass
+import re
 import tkinter as tk
 from tkinter import filedialog
 
-# --- Script Settings ---
+# Configuration
+CONFIG = {
+    "statistics_api_base": "https://sm.midnight.gd/api",
+    "donation_api_base": "https://scavenger.prod.gd.midnighttge.io",
+    "api_call_delay": 2,
+    "default_wallet_dir": "auto-mine-wallet",
+    "request_timeout": 30,
+    "max_retries": 3
+}
 
-# The default folder name we look for.
-DEFAULT_WALLET_DIR = "auto-mine-wallet"
 
-# The web address of the API
-API_BASE_URL = "https://sm.midnight.gd/api"
+# ==============================================================================
+# Data Models
+# ==============================================================================
 
-# A short pause (in seconds) between operations to be polite to the server.
-API_CALL_DELAY = 2
+@dataclass
+class Address:
+    """Represents a wallet address with associated files."""
+    index: int
+    address: str
+    addr_file: Path
+    skey_file: Path
+    is_registered: bool = False
+    has_solutions: int = 0
 
-# --- Helper Functions ---
 
-def clear_terminal_screen():
-    """Wipes the terminal screen clean for a fresh display."""
-    os.system('cls' if os.name == 'nt' else 'clear')
+@dataclass
+class ValidationResult:
+    """Result of address validation."""
+    is_valid: bool
+    message: str
+    needs_browser_check: bool = False
+    details: Dict[str, Any] = None
 
-def select_wallet_directory_popup():
-    """
-    Opens the pop-up window that lets the user choose a folder.
-    Returns the path to the folder they chose.
-    """
-    print("\nOpening folder selection dialog...")
-    print("(The window may appear behind other windows - check your taskbar!)")
-    
-    root = tk.Tk()
-    root.withdraw()
-    
-    # Bring the window to front
-    root.attributes('-topmost', True)
-    root.update()
-    
-    selected_path = filedialog.askdirectory(
-        title="Select the folder containing your wallet key files",
-        parent=root
-    )
-    
-    root.attributes('-topmost', False)
-    root.destroy()
-    
-    if selected_path:
-        print(f"\n✅ Folder selected: {selected_path}")
-    else:
-        print("\n⚠️  Folder selection was canceled.")
-        
-    return selected_path
 
-def is_valid_shelley_address(address):
-    """
-    Validates that an address is a Cardano Shelley receiving address.
-    Opens CardanoScan in browser for user to verify.
-    Returns (is_valid, message, needs_browser_check)
-    """
-    if not address:
-        return False, "Address cannot be empty", False
-    
-    # Cardano addresses must be lowercase (bech32 standard)
-    if address != address.lower():
-        return False, "Address must be lowercase", False
-    
-    # Shelley mainnet addresses start with 'addr1'
-    if not address.startswith('addr1'):
-        return False, "Address must be a Cardano Shelley mainnet address (starts with 'addr1')", False
-    
-    # Basic length check (Shelley payment addresses are exactly 103 characters)
-    if len(address) != 103:
-        return False, f"Address length ({len(address)}) is incorrect (Shelley addresses are 103 characters)", False
-    
-    # Check for valid bech32 characters
-    valid_chars = set('qpzry9x8gf2tvdw0s3jn54khce6mua7l')
-    address_body = address[5:]  # Skip 'addr1'
-    if not all(c in valid_chars for c in address_body.lower()):
-        return False, "Address contains invalid characters", False
-    
-    # Decode the address structure (don't require checksum to pass - CardanoScan will verify)
-    # Extract just the format to check network tag
-    addr_chars = address[5:].lower()
-    charset = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
-    data5 = [charset.index(c) for c in addr_chars if c in charset]
-    data5_payload = data5[:-6]  # Remove last 6 chars (checksum)
-    decoded = bech32_convertbits(data5_payload, 5, 8, False)
-    
-    if decoded and len(decoded) > 0:
-        network_tag = decoded[0] & 0x0F
-        if network_tag != 0x01:
-            return False, f"Address is not for Cardano mainnet", False
-    
-    # Valid format - CardanoScan browser check will be the final validator
-    return True, "✅ Valid address format (103 chars, correct structure)", True
+@dataclass
+class ConsolidationResult:
+    """Result of a consolidation operation."""
+    index: int
+    address: str
+    success: bool
+    message: str
+    donation_id: Optional[str] = None
+    skipped_reason: Optional[str] = None
 
-def check_address_unused(address):
-    """
-    Checks if an address is unused (has no transaction history on Cardano blockchain).
-    Returns (is_unused, message, details).
-    
-    This uses Koios API as the primary check, with fallback to simpler checks.
-    """
-    print(f"\n🔍 Checking Cardano blockchain for transaction history...")
-    
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    # Try Koios API (public, no API key needed) - most reliable
-    try:
-        koios_url = f"https://api.koios.rest/api/v1/address_info"
-        response = requests.post(
-            koios_url,
-            json={"_addresses": [address]},
-            headers={"Content-Type": "application/json", **headers},
-            timeout=20
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data and len(data) > 0:
-                addr_info = data[0]
-                
-                # Check if address has any UTXOs or transaction history
-                utxo_set = addr_info.get('utxo_set', [])
-                tx_count = addr_info.get('tx_count', 0)
-                balance = addr_info.get('balance', '0')
-                
-                if tx_count > 0:
-                    return False, f"❌ Address has {tx_count} transaction(s) on blockchain (NOT unused)", {
-                        'tx_count': tx_count,
-                        'balance': balance,
-                        'utxo_count': len(utxo_set)
-                    }
-                elif len(utxo_set) > 0:
-                    return False, f"❌ Address has {len(utxo_set)} UTXO(s) on blockchain (NOT unused)", {
-                        'tx_count': tx_count,
-                        'balance': balance,
-                        'utxo_count': len(utxo_set)
-                    }
-                else:
-                    return True, "✅ Address is unused (no blockchain transactions)", {
-                        'tx_count': 0,
-                        'balance': '0',
-                        'utxo_count': 0
-                    }
-            else:
-                # Address not found on blockchain = unused/new
-                return True, "✅ Address is unused (not found on blockchain - completely new)", {
-                    'tx_count': 0,
-                    'balance': '0',
-                    'utxo_count': 0
-                }
+
+class NavigationAction(Enum):
+    """Navigation actions for the UI."""
+    CONTINUE = "continue"
+    BACK = "back"
+    CANCEL = "cancel"
+    RETRY = "retry"
+
+
+# ==============================================================================
+# Bech32 Utilities (Pure Python Implementation)
+# ==============================================================================
+
+class Bech32:
+    """Bech32 encoding/decoding utilities for Cardano addresses."""
+
+    CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+    @staticmethod
+    def polymod(values):
+        GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+        chk = 1
+        for value in values:
+            b = chk >> 25
+            chk = (chk & 0x1ffffff) << 5 ^ value
+            for i in range(5):
+                chk ^= GEN[i] if ((b >> i) & 1) else 0
+        return chk
+
+    @staticmethod
+    def hrp_expand(hrp):
+        return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+
+    @staticmethod
+    def verify_checksum(hrp, data, const=1):
+        return Bech32.polymod(Bech32.hrp_expand(hrp) + data) == const
+
+    @staticmethod
+    def decode(bech):
+        if ((any(ord(x) < 33 or ord(x) > 126 for x in bech)) or
+                (bech.lower() != bech and bech.upper() != bech)):
+            return None, None
+
+        bech = bech.lower()
+        pos = bech.rfind('1')
+        if pos < 1 or pos + 7 > len(bech):
+            return None, None
+
+        if not all(x in Bech32.CHARSET for x in bech[pos+1:]):
+            return None, None
+
+        hrp = bech[:pos]
+        data = [Bech32.CHARSET.find(x) for x in bech[pos+1:]]
+
+        if Bech32.verify_checksum(hrp, data, 1):
+            return hrp, data[:-6]
+        elif Bech32.verify_checksum(hrp, data, 0x2bc830a3):
+            return hrp, data[:-6]
         else:
-            print(f"  ⚠️  Koios API returned {response.status_code}, will rely on CardanoScan validation")
-            return True, "✅ Address validation passed (Koios unavailable)", {'verified_by': 'cardanoscan'}
-            
-    except requests.exceptions.Timeout:
-        print(f"  ⚠️  Koios API timed out, will rely on CardanoScan validation")
-        return True, "✅ Address validation passed (Koios timeout)", {'verified_by': 'cardanoscan'}
-    except Exception as e:
-        print(f"  ⚠️  Koios check failed: {e}")
-        print(f"  ℹ️  Will rely on CardanoScan validation")
-        return True, "✅ Address validation passed (Koios unavailable)", {'verified_by': 'cardanoscan'}
+            return None, None
 
-def find_address_files(wallet_dir):
-    """
-    Finds all address files in the wallet directory.
-    Returns a list of tuples: (index, address_file, skey_file)
-    """
-    address_files = []
-    wallet_path = Path(wallet_dir)
-    
-    # Find all .addr files
-    for addr_file in sorted(wallet_path.glob("addr-*.addr")):
-        # Extract index from filename (e.g., "addr-0.addr" -> 0)
-        match = re.match(r"addr-(\d+)\.addr", addr_file.name)
-        if match:
-            index = int(match.group(1))
-            skey_file = wallet_path / f"addr-{index}.skey"
-            
-            if skey_file.exists():
-                # Read the address
-                with open(addr_file, 'r') as f:
-                    address = f.read().strip()
-                
-                address_files.append((index, address, addr_file, skey_file))
-    
-    return address_files
+    @staticmethod
+    def convertbits(data, frombits, tobits, pad=True):
+        acc = 0
+        bits = 0
+        ret = []
+        maxv = (1 << tobits) - 1
+        max_acc = (1 << (frombits + tobits - 1)) - 1
 
-def sign_donation_message(destination_address, original_address, skey_file):
-    """
-    Signs a donation message using CIP-8 signing.
-    Message format: "Assign accumulated Scavenger rights to: <destination_address>"
-    
-    This implementation replicates the Rust miner's signing logic in Python,
-    using only lightweight libraries (cbor2, pynacl, bech32).
-    """
-    try:
-        import cbor2
-        
-        # Read the signing key
-        with open(skey_file, 'r') as f:
-            key_data = json.load(f)
-        
-        cbor_hex = key_data['cborHex']
-        cbor_bytes = bytes.fromhex(cbor_hex)
-        
-        # The CBOR contains the key bytes (skip first 2 bytes which are CBOR tags)
-        private_key_bytes = cbor_bytes[2:34]
-        
-        # Create the message
-        message = f"Assign accumulated Scavenger rights to: {destination_address}"
-        
-        # For CIP-8 signing, we need to create a COSE_Sign1 structure
-        # This is a simplified implementation - you may need the full cardano-serialization-lib
-        
-        # Import bech32 for address decoding
-        # Decode the address to get raw bytes
-        # For Cardano addresses, we can decode the bech32 data directly
-        # The address format is: addr1<bech32-encoded-data>
-        # We'll use a simple character mapping approach
-        
-        addr_chars = original_address[5:]  # Skip 'addr1'
-        # Convert from bech32 charset to 5-bit values
-        charset = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
-        data5 = [charset.index(c) for c in addr_chars.lower() if c in charset]
-        
-        # Convert from 5-bit to 8-bit (remove checksum - last 6 chars = last ~8 5-bit values)
-        data5_payload = data5[:-6]  # Remove 6-character checksum
-        addr_bytes = bytes(bech32_convertbits(data5_payload, 5, 8, False))
-        
-        # Build the COSE_Sign1 structure (matches Rust implementation)
-        # Protected headers: {1: -8, "address": addr_bytes}
-        protected = {
-            1: -8,  # Algorithm: EdDSA
-            "address": addr_bytes
-        }
-        protected_encoded = cbor2.dumps(protected)
-        
-        # Unprotected headers: {"hashed": false}
-        unprotected = {"hashed": False}
-        
-        # Payload is the message bytes
-        payload = message.encode('utf-8')
-        
-        # Create Sig_structure for signing (CIP-8 standard)
-        sig_structure = [
-            "Signature1",
-            protected_encoded,
-            b"",  # external_aad
-            payload
-        ]
-        sig_structure_encoded = cbor2.dumps(sig_structure)
-        
-        # Sign with ed25519
-        from nacl.signing import SigningKey
-        from nacl.encoding import RawEncoder
-        
-        signing_key = SigningKey(private_key_bytes)
-        signature_bytes = signing_key.sign(sig_structure_encoded).signature
-        
-        # Build the final COSE_Sign1
-        cose_sign1 = cbor2.dumps([
-            protected_encoded,
-            unprotected,
-            payload,
-            signature_bytes
-        ])
-        
-        # Return as hex
-        return cose_sign1.hex()
-        
-    except ImportError as e:
-        print(f"\n❌ ERROR: Required Python library not found: {e}")
-        print("\nPlease install required dependencies:")
-        print("  pip install cbor2 pynacl bech32")
-        print("\nNote: bech32 is optional (built-in fallback available) but recommended for best validation!")
-        sys.exit(1)
-    except Exception as e:
-        raise Exception(f"Failed to sign message: {e}")
+        for value in data:
+            if value < 0 or (value >> frombits):
+                return None
+            acc = ((acc << frombits) | value) & max_acc
+            bits += frombits
+            while bits >= tobits:
+                bits -= tobits
+                ret.append((acc >> bits) & maxv)
 
-def consolidate_address(destination, original_address, signature):
-    """
-    Calls the donate_to API endpoint to consolidate solutions.
-    Returns (success, message, response_data)
-    
-    Handles various API responses:
-    - 200: Success (new donation or undo)
-    - 403: Feature not available
-    - 404: Original address not registered
-    - 409: Already has active donation to different address
-    - 400: Invalid signature
-    """
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    
-    url = f"{API_BASE_URL}/donate_to/{destination}/{original_address}/{signature}"
-    
-    print(f"  📡 Consolidating from: {original_address[:20]}...{original_address[-10:]}")
-    print(f"     Consolidating to:   {destination[:20]}...{destination[-10:]}")
-    
-    try:
-        response = requests.post(url, headers=headers, timeout=30)
-        
-        if response.status_code == 403:
-            return False, "⚠️  The donate_to API is currently unavailable (403 Forbidden). Feature not yet active.", None
-        
-        if response.status_code == 200:
-            data = response.json()
-            status = data.get('status', '')
-            message = data.get('message', '')
-            solutions = data.get('solutions_consolidated', data.get('Solutions_consolidated', 0))
-            donation_id = data.get('donation_id', 'N/A')
-            
-            # Check if this is an undo operation
-            if 'undo' in message.lower() or original_address == destination:
-                return True, f"  ✅ Undid previous donation assignment (ID: {donation_id})", data
-            else:
-                return True, f"  ✅ Successfully consolidated {solutions} solution(s) (ID: {donation_id})", data
-        
-        elif response.status_code == 404:
-            try:
-                error_data = response.json()
-                error_msg = error_data.get('message', 'Address not registered')
-            except:
-                error_msg = 'Original address not registered'
-            return False, f"  ❌ Failed: {error_msg}", None
-        
-        elif response.status_code == 409:
-            # Already has active donation to different address
-            try:
-                error_data = response.json()
-                error_msg = error_data.get('message', 'Conflict - already has active donation')
-            except:
-                error_msg = 'Address already has active donation assignment'
-            return False, f"  ⚠️  {error_msg}", None
-        
-        elif response.status_code == 400:
-            # Invalid signature or bad request
-            try:
-                error_data = response.json()
-                error_msg = error_data.get('message', 'Bad request')
-            except:
-                error_msg = 'Invalid signature or bad request'
-            return False, f"  ❌ Failed: {error_msg}", None
-        
-        else:
-            error_text = response.text()[:200]  # Limit error text length
-            return False, f"  ❌ Failed: HTTP {response.status_code} - {error_text}", None
-            
-    except requests.exceptions.Timeout:
-        return False, "  ❌ Request timed out", None
-    except Exception as e:
-        return False, f"  ❌ Error: {e}", None
-
-# --- Main Interface Functions ---
-
-def show_welcome_screen():
-    """Shows the initial welcome screen with important warnings."""
-    clear_terminal_screen()
-    print("=" * 70)
-    print("           NIGHT Miner Wallet Consolidation Tool")
-    print("=" * 70)
-    print()
-    print("⚠️  IMPORTANT INFORMATION - PLEASE READ CAREFULLY ⚠️")
-    print()
-    print("This tool will consolidate ALL solutions from your wallet addresses")
-    print("to a SINGLE destination address using the donate_to API.")
-    print()
-    print("REQUIREMENTS for the destination address:")
-    print("  ✓ Must be a valid Cardano Shelley address (starts with 'addr1')")
-    print("  ✓ Must be UNUSED (no transaction history on Cardano blockchain)")
-    print("  ✓ Does NOT need to be registered with Scavenger Mine")
-    print("  ✓ Should be under YOUR control")
-    print()
-    print("REQUIREMENTS for source addresses:")
-    print("  ✓ Must be REGISTERED with Scavenger Mine")
-    print("  ✓ The tool will use your key files to sign messages")
-    print()
-    print("PROCESS:")
-    print("  1. You provide a destination address")
-    print("  2. The tool validates the address format")
-    print("  3. The tool checks the Cardano blockchain for address history")
-    print("  4. You review all addresses that will be consolidated")
-    print("  5. You confirm the operation")
-    print("  6. Each address is consolidated one by one")
-    print()
-    print("NOTE: Consolidation applies to past AND future solutions!")
-    print("      You can undo by donating back to the original address.")
-    print()
-    print("AVAILABILITY:")
-    print("      Available during mining (days 1-21) and up to 24 hours after.")
-    print("      As of now, the API may return 403 if the feature is not active.")
-    print()
-    print("=" * 70)
-    input("\nPress Enter to continue...")
-
-def get_destination_address():
-    """
-    Prompts the user for a destination address and validates it.
-    Returns the validated address or None if cancelled.
-    """
-    clear_terminal_screen()
-    print("=" * 70)
-    print("              Enter Destination Address")
-    print("=" * 70)
-    print()
-    print("Please enter the Cardano Shelley address where you want to")
-    print("consolidate all your wallet's solutions.")
-    print()
-    print("The address MUST:")
-    print("  • Start with 'addr1' (Cardano mainnet)")
-    print("  • Have NO transaction history on the Cardano blockchain")
-    print("  • Be under your control")
-    print()
-    print("The address does NOT need to be registered with Scavenger Mine.")
-    print()
-    print("💡 TIP: Generate a fresh receiving address from your wallet!")
-    print()
-    print("Type 'cancel' to abort.")
-    print("-" * 70)
-    
-    while True:
-        destination = input("\nDestination address: ").strip()
-        
-        if destination.lower() == 'cancel':
+        if pad:
+            if bits:
+                ret.append((acc << (tobits - bits)) & maxv)
+        elif bits >= frombits or ((acc << (tobits - bits)) & maxv):
             return None
-        
-        if not destination:
-            print("❌ Address cannot be empty. Please try again.")
-            continue
-        
-        # Validate address format
-        is_valid, message, needs_browser_check = is_valid_shelley_address(destination)
-        
-        if is_valid is False:
-            print(f"❌ {message}")
-            print("   Please try again or type 'cancel' to abort.")
-            continue
-        else:
-            # Valid address format
-            print(f"   {message}")
-        
-        # Open CardanoScan in browser for visual verification
-        if needs_browser_check:
-            cardanoscan_url = f"https://cardanoscan.io/address/{destination}"
-            print(f"\n  🌐 Opening CardanoScan in your browser...")
-            print(f"  📍 {cardanoscan_url}")
-            
+
+        return ret
+
+
+# ==============================================================================
+# API Client
+# ==============================================================================
+
+class APIClient:
+    """Handles all API interactions with the NIGHT mining service."""
+
+    def __init__(self):
+        self.statistics_base = CONFIG["statistics_api_base"]
+        self.donation_base = CONFIG["donation_api_base"]
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+
+    def check_registration(self, address: str) -> Tuple[bool, str, Dict]:
+        """Check if an address is registered for mining."""
+        url = f"{self.statistics_base}/statistics/{address}"
+
+        for attempt in range(CONFIG["max_retries"]):
             try:
-                webbrowser.open(cardanoscan_url)
-                print("\n  ✅ Browser opened successfully")
-            except Exception as e:
-                print(f"\n  ⚠️  Could not open browser automatically: {e}")
-                print(f"  Please manually open: {cardanoscan_url}")
-            
-            print("\n" + "="*70)
-            print("  🔍 VERIFICATION REQUIRED")
-            print("="*70)
-            print("  Please check the CardanoScan page and verify:")
-            print("  1. The address is valid and recognized")
-            print("  2. The transaction count is 0 (zero)")
-            print("  3. The address has never been used on the blockchain")
-            print("="*70)
-            
-            confirm = input("\n  ✅ Can you confirm the address shows 0 transactions? (y)es / (n)o: ").strip().lower()
-            
-            if confirm not in ['yes', 'y']:
-                print("\n❌ Please verify the address is unused before proceeding.")
-                print("   Type 'cancel' to abort, or provide a different address.")
-                continue
-        
-        # Final confirmation
-        print("\n" + "=" * 70)
-        print("Destination address validated successfully!")
-        print("=" * 70)
-        print(f"\nAddress: {destination}")
-        print(f"Verified: User confirmed 0 transactions on CardanoScan")
-        print(f"Status:  Unused (no transaction history)")
-        print()
-        confirm = input("Is this correct? (y)es / (n)o: ").strip().lower()
-        
-        if confirm in ['yes', 'y']:
-            return destination
-        else:
-            print("\nLet's try again...")
-            input("Press Enter to continue...")
-            clear_terminal_screen()
-            print("=" * 70)
-            print("              Enter Destination Address")
-            print("=" * 70)
-            print()
+                response = self.session.get(url, timeout=CONFIG["request_timeout"])
 
-def show_consolidation_plan(wallet_dir, destination, address_files):
-    """
-    Shows the user what will happen and asks for confirmation.
-    Returns True if user confirms, False otherwise.
-    """
-    clear_terminal_screen()
-    print("=" * 70)
-    print("           Consolidation Plan - Review & Confirm")
-    print("=" * 70)
-    print()
-    print(f"Wallet Directory: {wallet_dir}")
-    print(f"Destination:      {destination}")
-    print()
-    print(f"Found {len(address_files)} address(es) with key files:")
-    print("-" * 70)
-    
-    for idx, address, addr_file, skey_file in address_files:
-        print(f"  [{idx}] {address[:30]}...{address[-20:]}")
-    
-    print("-" * 70)
-    print()
-    print("⚠️  IMPORTANT: This operation will:")
-    print("   • Sign a donation message with each address's private key")
-    print("   • Call the donate_to API for each address")
-    print("   • Consolidate ALL solutions (past AND future) to destination")
-    print("   • Apply to future solutions until you undo it")
-    print()
-    print("💡 You can undo this later by donating back to the original address.")
-    print()
-    print("Benefits of consolidation:")
-    print("   • Simplified NIGHT management from a single address")
-    print("   • Reduced transaction fees during redemption")
-    print("   • Lower minimum ADA requirements")
-    print()
-    print("=" * 70)
-    
-    while True:
-        confirm = input("\nType 'CONSOLIDATE' to proceed, or 'cancel' to abort: ").strip()
-        
-        if confirm.lower() == 'cancel':
-            return False
-        elif confirm == 'CONSOLIDATE':
-            return True
-        else:
-            print("❌ Please type exactly 'CONSOLIDATE' (in caps) to confirm, or 'cancel' to abort.")
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('local'):
+                        receipts = data['local'].get('crypto_receipts', 0)
+                        earnings = data['local'].get('night_allocation', 0)
+                        return True, f"Registered (Receipts: {receipts}, Earnings: {earnings} STAR)", data
+                    return False, "Address not found in mining registry", {}
 
-def perform_consolidation(destination, address_files):
-    """
-    Performs the actual consolidation process.
-    """
-    clear_terminal_screen()
-    print("=" * 70)
-    print("              Performing Consolidation")
-    print("=" * 70)
-    print()
-    
-    results = []
-    api_unavailable = False
-    
-    for i, (idx, address, addr_file, skey_file) in enumerate(address_files):
-        print(f"\n[{i+1}/{len(address_files)}] Processing address index {idx}...")
-        
-        try:
-            # Sign the donation message
-            print("  🔐 Signing donation message...")
-            signature = sign_donation_message(destination, address, skey_file)
-            print("  ✅ Message signed successfully")
-            
-            # Call the API
-            success, message, data = consolidate_address(destination, address, signature)
-            print(message)
-            
-            results.append({
-                'index': idx,
-                'address': address,
-                'success': success,
-                'message': message,
-                'data': data
-            })
-            
-            if not success and "403" in message:
-                api_unavailable = True
-                print("\n⚠️  The donate_to API is not yet available.")
-                print("   Stopping consolidation process.")
-                break
-            
-            # Small delay between addresses
-            if i < len(address_files) - 1 and success:
-                import time
-                time.sleep(API_CALL_DELAY)
-                
-        except Exception as e:
-            error_msg = f"  ❌ Unexpected error: {e}"
-            print(error_msg)
-            results.append({
-                'index': idx,
-                'address': address,
-                'success': False,
-                'message': error_msg,
-                'data': None
-            })
-    
-    # Show summary
-    print("\n" + "=" * 70)
-    print("              Consolidation Summary")
-    print("=" * 70)
-    
-    if api_unavailable:
-        print("\n⚠️  API NOT AVAILABLE")
-        print("\nThe donate_to API endpoint returned 403 Forbidden.")
-        print("This feature is not yet active on the server.")
-        print("\nPlease try again later when the API becomes available.")
-        print("No solutions were transferred.")
-    else:
-        successful = sum(1 for r in results if r['success'])
-        failed = len(results) - successful
-        
-        # Count different types of operations
-        consolidated_count = 0
-        undo_count = 0
-        already_assigned_count = 0
-        not_registered_count = 0
-        
-        for r in results:
-            if r['success']:
-                msg = r['message'].lower()
-                if 'undo' in msg:
-                    undo_count += 1
+                elif response.status_code in [400, 404]:
+                    return False, "Address is not registered for mining", {}
+
+                elif response.status_code == 429:
+                    wait_time = min(20 * (2 ** attempt), 60)
+                    if attempt < CONFIG["max_retries"] - 1:
+                        time.sleep(wait_time)
+                        continue
+                    return False, "Rate limited by server", {}
+
                 else:
-                    consolidated_count += 1
-                    # Try to get solution count
-                    if r.get('data'):
-                        consolidated_count += r['data'].get('solutions_consolidated', 
-                                                           r['data'].get('Solutions_consolidated', 0))
-            else:
-                msg = r['message'].lower()
-                if 'already has' in msg or 'conflict' in msg:
-                    already_assigned_count += 1
-                elif 'not registered' in msg:
-                    not_registered_count += 1
-        
-        print(f"\n  Total addresses processed: {len(results)}")
-        print(f"  Successful:                {successful}")
-        print(f"  Failed:                    {failed}")
-        
-        if consolidated_count > 0:
-            print(f"\n  ✅ New consolidations:     {consolidated_count}")
-        if undo_count > 0:
-            print(f"  ↩️  Undone assignments:    {undo_count}")
-        if already_assigned_count > 0:
-            print(f"  ⚠️  Already assigned:      {already_assigned_count}")
-        if not_registered_count > 0:
-            print(f"  ❌ Not registered:         {not_registered_count}")
-        
-        if failed > 0:
-            print("\n⚠️  Some addresses had issues:")
-            for r in results:
-                if not r['success']:
-                    print(f"    [{r['index']}] {r['address'][:30]}...")
-                    # Clean up the message for display
-                    clean_msg = r['message'].replace('  ❌ Failed:', '').replace('  ⚠️ ', '').strip()
-                    print(f"        → {clean_msg}")
-        
-        if successful > 0:
-            print("\n✅ Consolidation process completed!")
-            print("   Solutions from successful addresses will now accumulate")
-            print("   at the destination address.")
-            print()
-            print("💡 To undo: Run this tool again and donate back to original addresses.")
-    
-    print("\n" + "=" * 70)
-    input("\nPress Enter to exit...")
+                    return False, f"Server returned HTTP {response.status_code}", {}
 
-# --- Main Program ---
+            except requests.exceptions.RequestException as e:
+                if attempt < CONFIG["max_retries"] - 1:
+                    time.sleep(20 * (attempt + 1))
+                    continue
+                return False, f"Network error: {str(e)}", {}
+
+        return False, "Failed to check registration", {}
+
+    def consolidate_solutions(self, destination: str, source: str, signature: str) -> ConsolidationResult:
+        """Call the donate_to API to consolidate solutions."""
+        url = f"{self.donation_base}/donate_to/{destination}/{source}/{signature}"
+
+        try:
+            response = self.session.post(url, timeout=CONFIG["request_timeout"])
+
+            if response.status_code == 200:
+                data = response.json()
+                donation_id = data.get('donation_id', 'N/A')
+                message = data.get('message', '')
+
+                if 'undo' in message.lower() or source == destination:
+                    return ConsolidationResult(
+                        index=0, address=source, success=True,
+                        message="Undid previous donation assignment",
+                        donation_id=donation_id
+                    )
+                return ConsolidationResult(
+                    index=0, address=source, success=True,
+                    message="Successfully consolidated address",
+                    donation_id=donation_id
+                )
+
+            elif response.status_code == 403:
+                return ConsolidationResult(
+                    index=0, address=source, success=False,
+                    message="API unavailable (403)",
+                    skipped_reason="api_unavailable"
+                )
+
+            elif response.status_code == 404:
+                return ConsolidationResult(
+                    index=0, address=source, success=False,
+                    message="Address not registered",
+                    skipped_reason="not_registered"
+                )
+
+            elif response.status_code == 409:
+                return ConsolidationResult(
+                    index=0, address=source, success=True,
+                    message="Already consolidated (previous assignment active)",
+                    donation_id=None
+                )
+
+            elif response.status_code == 400:
+                return ConsolidationResult(
+                    index=0, address=source, success=False,
+                    message="Invalid signature",
+                    skipped_reason="signature_error"
+                )
+
+            else:
+                return ConsolidationResult(
+                    index=0, address=source, success=False,
+                    message=f"HTTP {response.status_code}",
+                    skipped_reason="server_error"
+                )
+
+        except Exception as e:
+            return ConsolidationResult(
+                index=0, address=source, success=False,
+                message=str(e),
+                skipped_reason="network_error"
+            )
+
+
+# ==============================================================================
+# Address Validator
+# ==============================================================================
+
+class AddressValidator:
+    """Validates Cardano addresses."""
+
+    @staticmethod
+    def validate_format(address: str) -> ValidationResult:
+        """Validate address format and structure."""
+        if not address:
+            return ValidationResult(False, "Address cannot be empty")
+
+        if address != address.lower():
+            return ValidationResult(False, "Address must be lowercase")
+
+        if not address.startswith('addr1'):
+            return ValidationResult(False, "Must be a Cardano Shelley mainnet address")
+
+        if len(address) != 103:
+            return ValidationResult(
+                False,
+                f"Invalid length ({len(address)}) - should be 103 characters"
+            )
+
+        valid_chars = set('qpzry9x8gf2tvdw0s3jn54khce6mua7l')
+        if not all(c in valid_chars for c in address[5:]):
+            return ValidationResult(False, "Contains invalid characters")
+
+        # Verify network tag
+        try:
+            addr_chars = address[5:]
+            data5 = [Bech32.CHARSET.index(c) for c in addr_chars if c in Bech32.CHARSET]
+            data5_payload = data5[:-6]
+            decoded = Bech32.convertbits(data5_payload, 5, 8, False)
+
+            if decoded and len(decoded) > 0:
+                network_tag = decoded[0] & 0x0F
+                if network_tag != 0x01:
+                    return ValidationResult(False, "Not a mainnet address")
+        except Exception:
+            return ValidationResult(False, "Invalid address structure")
+
+        return ValidationResult(
+            True,
+            "Valid address format",
+            needs_browser_check=True
+        )
+
+    @staticmethod
+    def open_cardanoscan(address: str) -> bool:
+        """Open CardanoScan in browser for address verification."""
+        url = f"https://cardanoscan.io/address/{address}"
+        try:
+            webbrowser.open(url)
+            return True
+        except Exception:
+            return False
+
+
+# ==============================================================================
+# Wallet Manager
+# ==============================================================================
+
+class WalletManager:
+    """Manages wallet files and signing operations."""
+
+    def __init__(self, wallet_dir: str):
+        self.wallet_dir = Path(wallet_dir)
+
+    def find_addresses(self) -> List[Address]:
+        """Find all address files in the wallet directory."""
+        addresses = []
+
+        for addr_file in sorted(self.wallet_dir.glob("addr-*.addr")):
+            match = re.match(r"addr-(\d+)\.addr", addr_file.name)
+            if match:
+                index = int(match.group(1))
+                skey_file = self.wallet_dir / f"addr-{index}.skey"
+
+                if skey_file.exists():
+                    with open(addr_file, 'r') as f:
+                        address_str = f.read().strip()
+
+                    addresses.append(Address(
+                        index=index,
+                        address=address_str,
+                        addr_file=addr_file,
+                        skey_file=skey_file
+                    ))
+
+        return addresses
+
+    def sign_message(self, destination: str, source_address: Address) -> str:
+        """Sign a donation message using CIP-8."""
+        try:
+            import cbor2
+            from nacl.signing import SigningKey
+
+            # Read signing key
+            with open(source_address.skey_file, 'r') as f:
+                key_data = json.load(f)
+
+            cbor_hex = key_data['cborHex']
+            cbor_bytes = bytes.fromhex(cbor_hex)
+            private_key_bytes = cbor_bytes[2:34]
+
+            # Create message
+            message = f"Assign accumulated Scavenger rights to: {destination}"
+
+            # Decode address
+            addr_chars = source_address.address[5:]
+            data5 = [Bech32.CHARSET.index(c) for c in addr_chars.lower() if c in Bech32.CHARSET]
+            data5_payload = data5[:-6]
+            addr_bytes = bytes(Bech32.convertbits(data5_payload, 5, 8, False))
+
+            # Build COSE_Sign1 structure
+            protected = {1: -8, "address": addr_bytes}
+            protected_encoded = cbor2.dumps(protected)
+            unprotected = {"hashed": False}
+            payload = message.encode('utf-8')
+
+            sig_structure = [
+                "Signature1",
+                protected_encoded,
+                b"",
+                payload
+            ]
+            sig_structure_encoded = cbor2.dumps(sig_structure)
+
+            # Sign with ed25519
+            signing_key = SigningKey(private_key_bytes)
+            signature_bytes = signing_key.sign(sig_structure_encoded).signature
+
+            # Build final COSE_Sign1
+            cose_sign1 = cbor2.dumps([
+                protected_encoded,
+                unprotected,
+                payload,
+                signature_bytes
+            ])
+
+            return cose_sign1.hex()
+
+        except ImportError:
+            raise RuntimeError(
+                "Required dependencies not found. Install with:\n"
+                "pip install cbor2 pynacl"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to sign message: {e}")
+
+
+# ==============================================================================
+# UI Manager
+# ==============================================================================
+
+class UIManager:
+    """Manages user interface and navigation."""
+
+    @staticmethod
+    def clear_screen():
+        """Clear the terminal screen."""
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    @staticmethod
+    def display_header(title: str):
+        """Display a formatted header."""
+        UIManager.clear_screen()
+        print("=" * 70)
+        print(f"  {title.center(66)}")
+        print("=" * 70)
+        print()
+
+    @staticmethod
+    def display_separator():
+        """Display a separator line."""
+        print("-" * 70)
+
+    @staticmethod
+    def prompt_action(prompt: str, options: List[str]) -> str:
+        """Prompt user for action with validation."""
+        valid_options = [opt.lower() for opt in options]
+        while True:
+            response = input(f"\n{prompt}: ").strip().lower()
+            if response in valid_options:
+                return response
+            print(f"Invalid option. Choose from: {', '.join(options)}")
+
+    @staticmethod
+    def prompt_confirmation(message: str) -> bool:
+        """Prompt for yes/no confirmation."""
+        response = UIManager.prompt_action(f"{message} (y/n)", ["y", "yes", "n", "no"])
+        return response in ["y", "yes"]
+
+    @staticmethod
+    def select_folder() -> Optional[str]:
+        """Open folder selection dialog."""
+        print("\nOpening folder selection dialog...")
+        print("(The window may appear behind other windows)")
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        root.update()
+
+        selected_path = filedialog.askdirectory(
+            title="Select wallet folder containing key files"
+        )
+
+        root.attributes('-topmost', False)
+        root.destroy()
+
+        return selected_path if selected_path else None
+
+    @staticmethod
+    def display_progress(current: int, total: int, message: str):
+        """Display progress indicator."""
+        print(f"\n[{current}/{total}] {message}")
+
+    @staticmethod
+    def display_summary(results: List[ConsolidationResult], record_file: Optional[str] = None):
+        """Display consolidation summary."""
+        print("\n" + "=" * 70)
+        print("  Consolidation Summary".center(70))
+        print("=" * 70)
+
+        successful = [r for r in results if r.success]
+        skipped = [r for r in results if r.skipped_reason == "not_registered"]
+        failed = [r for r in results if not r.success and r.skipped_reason != "not_registered"]
+
+        print(f"\nTotal addresses:     {len(results)}")
+        print(f"Successful:          {len(successful)}")
+        print(f"Skipped (unreg):     {len(skipped)}")
+        print(f"Failed:              {len(failed)}")
+
+        if successful:
+            print("\nSuccessful consolidations:")
+            for r in successful:
+                if r.donation_id:
+                    print(f"  ✅ [{r.index}] {r.address[:40]}...")
+                    print(f"     Consolidation ID: {r.donation_id}")
+                else:
+                    print(f"  ✅ [{r.index}] {r.address[:40]}... (already consolidated)")
+
+        if skipped:
+            print("\nUnregistered addresses (skipped):")
+            for r in skipped:
+                print(f"  ⚠️ [{r.index}] {r.address[:40]}...")
+
+        if failed:
+            print("\nFailed addresses:")
+            for r in failed:
+                print(f"  ❌ [{r.index}] {r.address[:40]}...")
+                print(f"     Reason: {r.message}")
+
+        if record_file:
+            # Show both files
+            json_file = record_file.replace('.txt', '.json')
+            print(f"\n📁 Consolidation records saved:")
+            print(f"   Text file: {record_file}")
+            print(f"   JSON file: {json_file}")
+
+        print("\n" + "=" * 70)
+
+
+# ==============================================================================
+# Navigation Controller
+# ==============================================================================
+
+class NavigationController:
+    """Manages application navigation flow."""
+
+    def __init__(self):
+        self.stack = []
+        self.current_state = "welcome"
+
+    def push_state(self, state: str):
+        """Push a new state onto the navigation stack."""
+        self.stack.append(self.current_state)
+        self.current_state = state
+
+    def pop_state(self) -> Optional[str]:
+        """Go back to previous state."""
+        if self.stack:
+            self.current_state = self.stack.pop()
+            return self.current_state
+        return None
+
+    def reset(self):
+        """Reset navigation to initial state."""
+        self.stack = []
+        self.current_state = "welcome"
+
+
+# ==============================================================================
+# Consolidation Controller
+# ==============================================================================
+
+class ConsolidationController:
+    """Main application controller."""
+
+    def __init__(self):
+        self.api_client = APIClient()
+        self.ui = UIManager()
+        self.nav = NavigationController()
+        self.wallet_manager = None
+        self.wallet_dir = None
+        self.addresses = []
+        self.destination = None
+        self.consolidation_records = []
+
+    def run(self):
+        """Main application entry point."""
+        try:
+            # Show welcome only once
+            if not self.show_welcome():
+                return
+
+            # Main consolidation loop
+            while True:
+                self.nav.reset()
+                self.nav.push_state("select_wallet")
+
+                # Process one wallet
+                if not self.process_wallet_consolidation():
+                    break
+
+                # Ask if user wants to consolidate another wallet
+                if not self.ask_continue_with_another_wallet():
+                    break
+
+        except KeyboardInterrupt:
+            print("\n\nOperation cancelled by user (Ctrl+C)")
+        except Exception as e:
+            print(f"\n\nUnexpected error: {e}")
+            input("Press Enter to exit...")
+
+    def process_wallet_consolidation(self) -> bool:
+        """Process a single wallet consolidation workflow."""
+        while True:
+            if self.nav.current_state == "select_wallet":
+                if not self.select_wallet():
+                    if not self.nav.pop_state():
+                        return False
+
+            elif self.nav.current_state == "select_destination":
+                if not self.select_destination():
+                    if not self.nav.pop_state():
+                        return False
+
+            elif self.nav.current_state == "confirm_plan":
+                if not self.confirm_plan():
+                    if not self.nav.pop_state():
+                        return False
+
+            elif self.nav.current_state == "execute":
+                self.execute_consolidation_with_retry()
+                return True
+
+            else:
+                return False
+
+    def ask_continue_with_another_wallet(self) -> bool:
+        """Ask if user wants to consolidate another wallet."""
+        print("\n" + "=" * 70)
+        print("  Continue with Another Wallet?".center(70))
+        print("=" * 70)
+
+        if self.ui.prompt_confirmation("\nWould you like to consolidate another wallet"):
+            # Reset addresses but potentially keep destination
+            self.addresses = []
+            self.wallet_manager = None
+            self.wallet_dir = None
+
+            # Ask about destination address
+            if self.destination:
+                print(f"\nCurrent destination: {self.destination[:40]}...")
+                if self.ui.prompt_confirmation("Use the same destination address"):
+                    # Keep the current destination
+                    self.nav.reset()
+                    self.nav.push_state("select_wallet")
+                else:
+                    # Clear destination for new selection
+                    self.destination = None
+                    self.nav.reset()
+                    self.nav.push_state("select_wallet")
+            return True
+        return False
+
+    def show_welcome(self) -> bool:
+        """Show welcome screen."""
+        self.ui.display_header("NIGHT Miner Wallet Consolidation Tool")
+
+        print("This tool consolidates mining solutions from multiple addresses")
+        print("to a single destination address.\n")
+
+        print("REQUIREMENTS:")
+        print("• All addresses must be registered at https://sm.midnight.gd")
+        print("• Destination must be unused on Cardano blockchain")
+        print("• You must have control of all addresses\n")
+
+        print("PROCESS:")
+        print("1. Select wallet folder")
+        print("2. Enter destination address")
+        print("3. Review consolidation plan")
+        print("4. Execute consolidation\n")
+
+        if self.ui.prompt_confirmation("Continue"):
+            self.nav.push_state("select_wallet")
+            return True
+        return False
+
+    def select_wallet(self) -> bool:
+        """Select and validate wallet directory."""
+        self.ui.display_header("Select Wallet Directory")
+
+        # Check for default directory
+        default_dir = CONFIG["default_wallet_dir"]
+        if os.path.isdir(default_dir):
+            print(f"Default wallet found: {default_dir}")
+            if self.ui.prompt_confirmation("Use this folder"):
+                self.wallet_dir = default_dir
+            else:
+                self.wallet_dir = self.ui.select_folder()
+        else:
+            print("Default wallet not found.")
+            input("Press Enter to browse for wallet...")
+            self.wallet_dir = self.ui.select_folder()
+
+        if not self.wallet_dir:
+            print("\nNo folder selected.")
+            return False
+
+        # Load addresses
+        self.wallet_manager = WalletManager(self.wallet_dir)
+        self.addresses = self.wallet_manager.find_addresses()
+
+        if not self.addresses:
+            print(f"\nNo address files found in: {self.wallet_dir}")
+            if self.ui.prompt_confirmation("Try different folder"):
+                return self.select_wallet()
+            return False
+
+        print(f"\nFound {len(self.addresses)} address(es)")
+
+        # If destination is already set, skip to confirmation
+        if self.destination:
+            self.nav.push_state("confirm_plan")
+        else:
+            self.nav.push_state("select_destination")
+        return True
+
+    def select_destination(self) -> bool:
+        """Select and validate destination address."""
+        self.ui.display_header("Enter Destination Address")
+
+        print("Enter the Cardano address where solutions will be consolidated.")
+        print("The address must:")
+        print("• Start with 'addr1'")
+        print("• Have no transaction history")
+        print("• Be registered for mining\n")
+
+        while True:
+            destination = input("Destination address (or 'back'): ").strip()
+
+            if destination.lower() == 'back':
+                return False
+
+            # Validate format
+            validation = AddressValidator.validate_format(destination)
+            if not validation.is_valid:
+                print(f"\n❌ {validation.message}")
+                continue
+
+            print(f"\n✅ {validation.message}")
+
+            # Check blockchain history
+            if validation.needs_browser_check:
+                print("\n🌐 Opening CardanoScan for verification...")
+                AddressValidator.open_cardanoscan(destination)
+                print("    Please verify the address shows 0 transactions.")
+
+                if not self.ui.prompt_confirmation(
+                    "\nDoes CardanoScan show 0 transactions"
+                ):
+                    print("\n⚠️  Address must be unused (0 transactions) to consolidate.")
+                    continue
+
+                print("✅ Blockchain verification confirmed by user")
+
+            # Check registration
+            print("\n🔍 Checking mining registration status...")
+            print("   (This may take a few seconds...)")
+            is_registered, message, _ = self.api_client.check_registration(destination)
+
+            if not is_registered:
+                print(f"\n❌ {message}")
+                print("\nRegister at: https://sm.midnight.gd")
+
+                action = self.ui.prompt_action(
+                    "Action", ["retry", "new", "back"]
+                )
+                if action == "retry":
+                    continue
+                elif action == "back":
+                    return False
+                else:
+                    continue
+
+            print(f"\n✅ {message}")
+            self.destination = destination
+            self.nav.push_state("confirm_plan")
+            return True
+
+    def confirm_plan(self) -> bool:
+        """Display and confirm consolidation plan."""
+        self.ui.display_header("Review Consolidation Plan")
+
+        print(f"Wallet:      {self.wallet_dir}")
+        print(f"Destination: {self.destination}\n")
+
+        print(f"Addresses to consolidate: {len(self.addresses)}")
+        self.ui.display_separator()
+
+        for addr in self.addresses[:5]:
+            print(f"  [{addr.index}] {addr.address[:40]}...")
+        if len(self.addresses) > 5:
+            print(f"  ... and {len(self.addresses) - 5} more")
+
+        self.ui.display_separator()
+        print("\nThis will consolidate all current and future solutions to the destination.")
+        print("\n📁 A record of all successful consolidations will be saved with:")
+        print("   • Origin addresses")
+        print("   • Destination address")
+        print("   • Consolidation IDs")
+        print("\nYou can retry any failed consolidations after the initial attempt.")
+
+        confirm = input("\nType 'CONSOLIDATE' to proceed or 'back': ").strip()
+
+        if confirm == 'CONSOLIDATE':
+            self.nav.push_state("execute")
+            return True
+        elif confirm.lower() == 'back':
+            return False
+
+        print("Please type exactly 'CONSOLIDATE' to confirm.")
+        return self.confirm_plan()
+
+    def save_consolidation_records(self, results: List[ConsolidationResult]) -> Optional[str]:
+        """Save consolidation records."""
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        txt_file = f"consolidation_records_{timestamp}.txt"
+
+        records = []
+        for r in results:
+            if r.success and r.donation_id:
+                records.append({
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "origin_address": r.address,
+                    "destination_address": self.destination,
+                    "consolidation_id": r.donation_id
+                })
+
+        if records:
+
+            # Save TXT file (for end users)
+            txt_path = os.path.abspath(txt_file)
+            with open(txt_path, 'w') as f:
+                f.write("=" * 70 + "\n")
+                f.write("NIGHT Miner - Consolidation Records\n")
+                f.write("=" * 70 + "\n\n")
+                f.write(f"Consolidation Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Destination Address: {self.destination}\n")
+                f.write(f"Total Consolidated: {len(records)} address(es)\n\n")
+                f.write("=" * 70 + "\n")
+                f.write("Consolidation Details\n")
+                f.write("=" * 70 + "\n\n")
+
+                for i, record in enumerate(records, 1):
+                    f.write(f"[{i}] Origin Address:\n")
+                    f.write(f"    {record['origin_address']}\n\n")
+                    f.write(f"    Consolidation ID: {record['consolidation_id']}\n")
+                    f.write(f"    Timestamp: {record['timestamp']}\n\n")
+                    f.write("-" * 70 + "\n\n")
+
+                f.write("=" * 70 + "\n")
+                f.write("IMPORTANT NOTES:\n")
+                f.write("=" * 70 + "\n\n")
+                f.write("• All current and future solutions from the origin addresses will\n")
+                f.write("  accumulate at the destination address.\n\n")
+                f.write("• Keep this record for your reference.\n\n")
+
+            return txt_path  # Return the text file path as it's more user-friendly
+        return None
+
+    def process_address(self, addr: Address) -> ConsolidationResult:
+        """Process a single address for consolidation."""
+        # Check registration
+        is_registered, reg_msg, _ = self.api_client.check_registration(
+            addr.address
+        )
+
+        if not is_registered:
+            print(f"  ⚠️ Skipped - {reg_msg}")
+            return ConsolidationResult(
+                index=addr.index,
+                address=addr.address,
+                success=False,
+                message=reg_msg,
+                skipped_reason="not_registered"
+            )
+
+        try:
+            # Sign message
+            print("  Signing message...")
+            signature = self.wallet_manager.sign_message(
+                self.destination, addr
+            )
+
+            # Consolidate
+            print("  Consolidating...")
+            result = self.api_client.consolidate_solutions(
+                self.destination, addr.address, signature
+            )
+            result.index = addr.index
+
+            if result.success:
+                if result.donation_id:
+                    print(f"  ✅ {result.message} (ID: {result.donation_id})")
+                else:
+                    print(f"  ✅ {result.message}")
+            else:
+                print(f"  ❌ {result.message}")
+
+            return result
+
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+            return ConsolidationResult(
+                index=addr.index,
+                address=addr.address,
+                success=False,
+                message=str(e),
+                skipped_reason="error"
+            )
+
+    def execute_consolidation_with_retry(self):
+        """Execute the consolidation process with retry option."""
+        self.ui.display_header("Executing Consolidation")
+
+        results = []
+
+        for i, addr in enumerate(self.addresses):
+            self.ui.display_progress(
+                i + 1, len(self.addresses),
+                f"Processing {addr.address[:40]}..."
+            )
+
+            result = self.process_address(addr)
+            results.append(result)
+
+            # Delay between operations
+            if i < len(self.addresses) - 1:
+                time.sleep(CONFIG["api_call_delay"])
+
+        # Save records
+        record_file = self.save_consolidation_records(results)
+
+        # Display summary
+        self.ui.display_summary(results, record_file)
+
+        # Offer retry for failed addresses
+        failed = [r for r in results if not r.success and r.skipped_reason not in ["not_registered", "api_unavailable"]]
+
+        if failed:
+            print("\n" + "=" * 70)
+            print("  Retry Failed Addresses".center(70))
+            print("=" * 70)
+
+            if self.ui.prompt_confirmation(f"\n{len(failed)} address(es) failed. Would you like to retry"):
+                self.retry_failed_addresses(failed, results)
+
+    def retry_failed_addresses(self, failed_results: List[ConsolidationResult], all_results: List[ConsolidationResult]):
+        """Retry failed addresses."""
+        self.ui.display_header("Retrying Failed Addresses")
+
+        retry_addresses = []
+        for r in failed_results:
+            for addr in self.addresses:
+                if addr.index == r.index:
+                    retry_addresses.append(addr)
+                    break
+
+        new_results = []
+        for i, addr in enumerate(retry_addresses):
+            self.ui.display_progress(
+                i + 1, len(retry_addresses),
+                f"Retrying {addr.address[:40]}..."
+            )
+
+            result = self.process_address(addr)
+            new_results.append(result)
+
+            # Update the original results
+            for j, orig_result in enumerate(all_results):
+                if orig_result.index == result.index:
+                    all_results[j] = result
+                    break
+
+            if i < len(retry_addresses) - 1:
+                time.sleep(CONFIG["api_call_delay"])
+
+        # Save updated records
+        record_file = self.save_consolidation_records(all_results)
+
+        # Display updated summary
+        self.ui.display_summary(all_results, record_file)
+
+        # Check if there are still failures
+        still_failed = [r for r in new_results if not r.success and r.skipped_reason not in ["not_registered", "api_unavailable"]]
+
+        if still_failed:
+            if self.ui.prompt_confirmation(f"\n{len(still_failed)} address(es) still failed. Retry again"):
+                self.retry_failed_addresses(still_failed, all_results)
+        else:
+            if new_results:  # Only show success message if we actually retried something
+                print("\n✅ All retried addresses processed successfully!")
+
+
+# ==============================================================================
+# Entry Point
+# ==============================================================================
 
 def main():
-    """The main function that runs the program."""
-    
-    # Show welcome screen
-    show_welcome_screen()
-    
-    # Select wallet directory
-    wallet_dir = DEFAULT_WALLET_DIR
-    
-    clear_terminal_screen()
-    print("=" * 70)
-    print("           Select Wallet Directory")
-    print("=" * 70)
-    
-    if os.path.isdir(wallet_dir):
-        print(f"\nDefault wallet folder found: {wallet_dir}")
-        choice = input("\nUse this folder? (y)es / (n)o: ").strip().lower()
-        
-        if choice not in ['yes', 'y']:
-            print("\nOpening folder selection window...")
-            chosen_dir = select_wallet_directory_popup()
-            
-            if chosen_dir:
-                wallet_dir = chosen_dir
-            else:
-                print("\n❌ No wallet folder was selected. Exiting.")
-                sys.exit(1)
-    else:
-        print(f"\nThe default wallet folder ('{wallet_dir}') was not found.")
-        input("\nPress Enter to open a folder selection window...")
-        
-        chosen_dir = select_wallet_directory_popup()
-        
-        if chosen_dir:
-            wallet_dir = chosen_dir
-        else:
-            print("\n❌ No wallet folder was selected. Exiting.")
-            sys.exit(1)
-    
-    # Confirm the selected folder
-    print("\n" + "=" * 70)
-    print("           Confirm Wallet Directory")
-    print("=" * 70)
-    print(f"\nSelected folder: {wallet_dir}")
-    
-    # Preview address files in the folder
-    preview_files = [f for f in os.listdir(wallet_dir) if f.endswith('.addr')][:5]
-    if preview_files:
-        print(f"\nFound {len(preview_files)} address file(s):")
-        for f in preview_files:
-            print(f"  • {f}")
-        if len(preview_files) == 5:
-            print("  ...")
-    
-    confirm = input("\nIs this the correct wallet folder? (y)es / (n)o: ").strip().lower()
-    
-    if confirm not in ['yes', 'y']:
-        print("\n❌ Folder not confirmed. Exiting.")
-        print("   Please run the script again to select a different folder.")
-        sys.exit(1)
-    
-    # Find address files
-    address_files = find_address_files(wallet_dir)
-    
-    if not address_files:
-        print("\n❌ ERROR: No address files found in the wallet directory!")
-        print(f"   Looked in: {wallet_dir}")
-        print("   Expected files: addr-N.addr and addr-N.skey")
-        input("\nPress Enter to exit...")
-        sys.exit(1)
-    
-    # Get destination address
-    destination = get_destination_address()
-    
-    if not destination:
-        print("\n❌ Operation cancelled by user.")
-        sys.exit(0)
-    
-    # Show plan and get confirmation
-    if not show_consolidation_plan(wallet_dir, destination, address_files):
-        print("\n❌ Operation cancelled by user.")
-        sys.exit(0)
-    
-    # Perform consolidation
-    perform_consolidation(destination, address_files)
+    """Main entry point."""
+    controller = ConsolidationController()
+    controller.run()
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\n❌ Operation interrupted by user (Ctrl+C).")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n\n❌ Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        input("\nPress Enter to exit...")
-        sys.exit(1)
+    main()
