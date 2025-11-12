@@ -29,6 +29,12 @@ The consolidation tool allows you to:
 
 **Important:** This tool uses the official donate_to API. All your addresses (source and destination) must be registered at https://sm.midnight.gd before consolidation.
 
+You can check if your address is registered by replacing the address in the following link with your destination address:
+
+https://sm.midnight.gd/api/statistics/addr1q8dsfs49kqg8w95c6zg2y8ytdz9ajgv53rnu9kxk7w2r5pv67n6yqakfjqs54rt4rsuh4q3359ru6znqmnulaahh67sspt4a9d
+
+If the address is registered, you will see values for crypto_receipts and night_allocation (even if those values are 0).
+
 ---
 
 ## Before You Start
@@ -553,3 +559,4 @@ Before you close this guide, make sure you've:
 
 *Last Updated: November 2024*
 *Tool Version: Latest from https://github.com/SL13PNIR/night-miner*
+
