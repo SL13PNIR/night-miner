@@ -348,7 +348,7 @@ Successful consolidations:
 
 ### Saved Records
 
-Two files are created for each consolidation session:
+The following file is created for each consolidation session:
 
 1. **Text File (`.txt`)** - Human-readable record with:
    - Consolidation date and time
@@ -555,6 +555,7 @@ Before you close this guide, make sure you've:
 
 *Last Updated: November 2024*
 *Tool Version: Latest from https://github.com/SL13PNIR/night-miner*
+
 
 
 
