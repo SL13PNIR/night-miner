@@ -44,7 +44,7 @@ If the address is registered, you will see values for crypto_receipts and night_
 - [ ] You have a wallet folder containing your address files (`.addr` and `.skey` files)
 - [ ] You have a destination Cardano address (starts with `addr1`)
 - [ ] Your destination address is **unused** (0 transactions on the blockchain)
-- [ ] ALL addresses (source and destination) are **registered** at https://sm.midnight.gd
+- [ ] Your destination address is **registered** at https://sm.midnight.gd
 - [ ] You have control of all addresses
 
 **⚠️ IMPORTANT:** Registration CANNOT be done through this tool. You must register at https://sm.midnight.gd first.
@@ -555,6 +555,7 @@ Before you close this guide, make sure you've:
 
 *Last Updated: November 2024*
 *Tool Version: Latest from https://github.com/SL13PNIR/night-miner*
+
 
 
 
