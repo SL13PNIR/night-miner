@@ -361,8 +361,9 @@ class AddressValidator:
 class WalletManager:
     """Manages wallet files and signing operations."""
 
-    def __init__(self, wallet_dir: str):
+    def __init__(self, wallet_dir: str, ui: 'UIManager' = None):
         self.wallet_dir = Path(wallet_dir)
+        self.ui = ui
 
     def find_addresses(self) -> List[Address]:
         """Find all address files in the wallet directory."""
@@ -376,7 +377,7 @@ class WalletManager:
 
                 if skey_file.exists():
                     with open(addr_file, 'r') as f:
-                        address_str = f.read().strip()
+                        address_str = f.read().strip().lower()  # Normalize to lowercase
 
                     addresses.append(Address(
                         index=index,
@@ -386,6 +387,306 @@ class WalletManager:
                     ))
 
         return addresses
+
+    def verify_key_address_pairs(self, addresses: List[Address]) -> Dict[int, List[int]]:
+        """
+        Verify which signing keys can successfully derive each address.
+        Returns a dict mapping address index to list of compatible key indices.
+        """
+        try:
+            from nacl.signing import SigningKey
+        except ImportError:
+            print("Required dependencies not found. Install with: pip install cbor2 pynacl")
+            return {}
+
+        print("\n" + "=" * 70)
+        print("  Diagnostic: Verifying Key/Address Pairs".center(70))
+        print("=" * 70)
+        print("\nTesting all key/address combinations...")
+        print("This may take a moment...\n")
+
+        compatibility_map = {}
+
+        # Extract all keys and addresses
+        all_keys = []
+        for addr in addresses:
+            try:
+                with open(addr.skey_file, 'r') as f:
+                    key_data = json.load(f)
+                cbor_hex = key_data['cborHex']
+                cbor_bytes = bytes.fromhex(cbor_hex)
+                private_key_bytes = cbor_bytes[2:34]
+                all_keys.append((addr.index, private_key_bytes))
+            except Exception as e:
+                print(f"⚠️  Error reading key {addr.index}: {e}")
+                continue
+
+        # Test each address against all keys
+        for addr in addresses:
+            compatible_keys = []
+
+            for key_index, private_key_bytes in all_keys:
+                try:
+                    # Derive public key from private key
+                    signing_key = SigningKey(private_key_bytes)
+                    public_key = signing_key.verify_key
+                    public_key_bytes = bytes(public_key)
+
+                    # Build Cardano address from public key
+                    # Payment credential: key hash (type 0x00)
+                    import hashlib
+
+                    # Hash the public key
+                    pub_key_hash = hashlib.blake2b(public_key_bytes, digest_size=28).digest()
+
+                    # Build address bytes: header (0x01 for mainnet base address with key stake credential)
+                    # For simplicity, we'll just check if the payment key hash matches
+                    # This is a simplified check - full derivation would be more complex
+
+                    # Decode the actual address to get its payment key hash
+                    addr_chars = addr.address[5:]
+                    data5 = [Bech32.CHARSET.index(c) for c in addr_chars if c in Bech32.CHARSET]
+                    data5_payload = data5[:-6]
+                    addr_bytes = bytes(Bech32.convertbits(data5_payload, 5, 8, False))
+
+                    # The payment key hash starts at byte 1 (after the header byte)
+                    if len(addr_bytes) > 29:
+                        addr_payment_key_hash = addr_bytes[1:29]
+
+                        # Check if hashes match
+                        if pub_key_hash == addr_payment_key_hash:
+                            compatible_keys.append(key_index)
+
+                except Exception:
+                    # Silently skip incompatible combinations
+                    continue
+
+            compatibility_map[addr.index] = compatible_keys
+
+        return compatibility_map
+
+    def diagnose_signature_issues(self, addresses: List[Address]) -> Optional[Path]:
+        """
+        Run diagnostic tests to identify signature validation issues.
+        Returns Path to repaired wallet if repair was successful, None otherwise.
+        """
+        print("\n" + "=" * 70)
+        print("  Signature Diagnostic Tool".center(70))
+        print("=" * 70)
+        print("\nThis tool will help identify why signatures might be failing.")
+        print("Testing all key/address combinations in your wallet...\n")
+
+        compat_map = self.verify_key_address_pairs(addresses)
+
+        if not compat_map:
+            print("❌ Could not perform diagnostic tests.")
+            return None
+
+        print("\n" + "=" * 70)
+        print("  Diagnostic Results".center(70))
+        print("=" * 70)
+
+        mismatches = []
+        correct_pairs = []
+
+        for addr in addresses:
+            compatible_keys = compat_map.get(addr.index, [])
+
+            if addr.index in compatible_keys:
+                # Expected key works
+                correct_pairs.append(addr.index)
+                if len(compatible_keys) > 1:
+                    print(f"\n✅ Address {addr.index}: Key {addr.index} is correct")
+                    print(f"   Note: Also compatible with keys: {[k for k in compatible_keys if k != addr.index]}")
+            else:
+                # Expected key doesn't work - this is a problem!
+                mismatches.append(addr.index)
+                if compatible_keys:
+                    print(f"\n❌ Address {addr.index}: MISMATCH DETECTED!")
+                    print(f"   Expected key: {addr.index}")
+                    print(f"   Compatible keys found: {compatible_keys}")
+                    print(f"   → Key file addr-{addr.index}.skey does NOT match addr-{addr.index}.addr")
+                    print(f"   → Correct key appears to be: addr-{compatible_keys[0]}.skey")
+                else:
+                    print(f"\n❌ Address {addr.index}: No compatible key found!")
+                    print(f"   This address cannot be signed with any available keys")
+
+        print("\n" + "=" * 70)
+        print("  Summary".center(70))
+        print("=" * 70)
+        print(f"\nTotal addresses: {len(addresses)}")
+        print(f"Correct pairs: {len(correct_pairs)}")
+        print(f"Mismatched pairs: {len(mismatches)}")
+
+        if mismatches:
+            print("\n⚠️  ISSUE FOUND: Key/address mismatches detected!")
+            print("\nAddresses with mismatched keys:")
+            for idx in mismatches:
+                compatible = compat_map.get(idx, [])
+                if compatible:
+                    print(f"  • addr-{idx}.addr should use addr-{compatible[0]}.skey")
+                else:
+                    print(f"  • addr-{idx}.addr has no compatible key in this wallet")
+
+            print("\nThe automatic repair tool can create a new wallet folder with")
+            print("the correct key/address pairs, fixing this issue.")
+
+            # Offer auto-fix
+            if self.ui.prompt_confirmation("\nWould you like to attempt automatic repair"):
+                return self.auto_fix_key_mismatches(compat_map, mismatches)
+            return None
+        else:
+            print("\n✅ All key/address pairs are correct!")
+            print("   The signature issue may be caused by something else.")
+            print("\nOther potential causes:")
+            print("• Network or API issues")
+            print("• Address already consolidated to a different destination")
+            print("• Destination address requirements not met")
+            return None
+
+    def auto_fix_key_mismatches(self, compat_map: Dict[int, List[int]], mismatches: List[int]) -> Optional[Path]:
+        """
+        Automatically fix key/address mismatches by creating a repaired wallet copy.
+        Returns Path to repaired wallet if successful, None otherwise.
+        """
+        import shutil
+        from datetime import datetime
+
+        print("\n" + "=" * 70)
+        print("  Auto-Fix: Repairing Key/Address Mismatches".center(70))
+        print("=" * 70)
+
+        # Build fix plan
+        fix_plan = []
+        unfixable = []
+
+        for addr_idx in mismatches:
+            compatible = compat_map.get(addr_idx, [])
+            if compatible:
+                # Use the first compatible key
+                correct_key_idx = compatible[0]
+                fix_plan.append((addr_idx, correct_key_idx))
+            else:
+                unfixable.append(addr_idx)
+
+        if unfixable:
+            print("\n⚠️  Warning: Some addresses cannot be fixed automatically:")
+            for idx in unfixable:
+                print(f"  • addr-{idx}.addr has no compatible key in this wallet")
+            print("\nThese addresses will be skipped.")
+
+        if not fix_plan:
+            print("\n❌ No fixable mismatches found.")
+            return None
+
+        # Create new folder name
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        original_folder_name = self.wallet_dir.name
+        repaired_folder_name = f"{original_folder_name}-repaired-{timestamp}"
+        repaired_folder_path = self.wallet_dir.parent / repaired_folder_name
+
+        # Display fix plan
+        print("\n" + "=" * 70)
+        print("  Fix Plan".center(70))
+        print("=" * 70)
+        print(f"\nA new repaired wallet folder will be created:")
+        print(f"  {repaired_folder_path}")
+        print(f"\nYour original wallet folder will NOT be modified:")
+        print(f"  {self.wallet_dir}")
+        print(f"\nThe following repairs will be made in the new folder:\n")
+
+        for addr_idx, key_idx in fix_plan:
+            print(f"Address {addr_idx}:")
+            print(f"  • Original key: addr-{addr_idx}.skey (from addr-{addr_idx}.skey)")
+            print(f"  • Repaired key: addr-{addr_idx}.skey (from addr-{key_idx}.skey)")
+            print()
+
+        # Confirm fix
+        print("=" * 70)
+        if not self.ui.prompt_confirmation("\nCreate repaired wallet folder and retry consolidation"):
+            print("Repair cancelled.")
+            return None
+
+        # Execute fixes
+        print("\n" + "=" * 70)
+        print("  Creating Repaired Wallet".center(70))
+        print("=" * 70)
+        print()
+
+        try:
+            # Create new folder
+            repaired_folder_path.mkdir(exist_ok=False)
+            print(f"✅ Created folder: {repaired_folder_name}\n")
+
+            # Copy all .addr files unchanged
+            print("Copying address files...")
+            for addr_file in self.wallet_dir.glob("addr-*.addr"):
+                shutil.copy2(addr_file, repaired_folder_path / addr_file.name)
+                print(f"  ✅ Copied {addr_file.name}")
+
+            print("\nCopying and fixing key files...")
+
+            # Copy .skey files, applying fixes where needed
+            fixed_count = 0
+            copied_unchanged = 0
+
+            for addr_file in sorted(self.wallet_dir.glob("addr-*.addr")):
+                match = re.match(r"addr-(\d+)\.addr", addr_file.name)
+                if match:
+                    addr_idx = int(match.group(1))
+                    skey_name = f"addr-{addr_idx}.skey"
+
+                    # Check if this address needs fixing
+                    needs_fix = False
+                    correct_key_idx = addr_idx
+
+                    for fix_addr_idx, fix_key_idx in fix_plan:
+                        if fix_addr_idx == addr_idx:
+                            needs_fix = True
+                            correct_key_idx = fix_key_idx
+                            break
+
+                    source_skey = self.wallet_dir / f"addr-{correct_key_idx}.skey"
+                    dest_skey = repaired_folder_path / skey_name
+
+                    if source_skey.exists():
+                        shutil.copy2(source_skey, dest_skey)
+                        if needs_fix:
+                            print(f"  ✅ FIXED addr-{addr_idx}.skey (using key from addr-{correct_key_idx}.skey)")
+                            fixed_count += 1
+                        else:
+                            print(f"  ✅ Copied {skey_name}")
+                            copied_unchanged += 1
+
+            # Summary
+            print("\n" + "=" * 70)
+            print("  Repair Complete".center(70))
+            print("=" * 70)
+            print(f"\nRepaired folder created: {repaired_folder_name}")
+            print(f"Fixed addresses:         {fixed_count}")
+            print(f"Unchanged addresses:     {copied_unchanged}")
+
+            if unfixable:
+                print(f"Unfixable addresses:     {len(unfixable)}")
+
+            print(f"\n✅ Your repaired wallet is ready!")
+            print(f"\nLocation: {repaired_folder_path}")
+            print(f"\nOriginal wallet preserved at: {self.wallet_dir}")
+            print(f"\nRetrying consolidation with repaired wallet...")
+
+            print("\n" + "=" * 70)
+            return repaired_folder_path
+
+        except Exception as e:
+            print(f"\n❌ Error creating repaired wallet: {e}")
+            if repaired_folder_path.exists():
+                print("Cleaning up partial repair...")
+                try:
+                    shutil.rmtree(repaired_folder_path)
+                    print("Cleanup complete.")
+                except Exception:
+                    pass
+            return None
 
     def sign_message(self, destination: str, source_address: Address) -> str:
         """Sign a donation message using CIP-8."""
@@ -754,7 +1055,7 @@ class ConsolidationController:
             return False
 
         # Load addresses
-        self.wallet_manager = WalletManager(self.wallet_dir)
+        self.wallet_manager = WalletManager(self.wallet_dir, self.ui)
         self.addresses = self.wallet_manager.find_addresses()
 
         if not self.addresses:
@@ -1104,6 +1405,38 @@ class ConsolidationController:
 
         # Display summary
         self.ui.display_summary(results, record_file)
+
+        # Check for signature errors and offer diagnostic
+        signature_errors = [r for r in results if r.skipped_reason == "signature_error"]
+
+        if signature_errors:
+            print("\n" + "=" * 70)
+            print("  Signature Error Detected".center(70))
+            print("=" * 70)
+            print(f"\n⚠️  {len(signature_errors)} address(es) failed due to invalid signature.")
+            print("\nThis usually indicates that the signing key files don't match their")
+            print("corresponding address files (e.g., keys got mixed up).")
+            print("\nRunning automatic diagnostic to identify the issue...")
+            input("\nPress Enter to start diagnostic...")
+
+            # Run diagnostic automatically
+            repaired_wallet_path = self.wallet_manager.diagnose_signature_issues(self.addresses)
+
+            if repaired_wallet_path:
+                # Switch to repaired wallet and reload addresses
+                input("\nPress Enter to retry with repaired wallet...")
+                self.wallet_dir = str(repaired_wallet_path)
+                self.wallet_manager = WalletManager(self.wallet_dir, self.ui)
+                self.addresses = self.wallet_manager.find_addresses()
+
+                print(f"\n✅ Loaded {len(self.addresses)} address(es) from repaired wallet")
+                print("\nRetrying consolidation with repaired wallet...\n")
+                time.sleep(2)
+
+                # Retry consolidation with repaired wallet
+                return self.execute_consolidation_with_retry()
+            else:
+                input("\nPress Enter to continue...")
 
         # Offer retry for failed addresses
         failed = [r for r in results if not r.success and r.skipped_reason not in ["not_registered", "api_unavailable"]]
