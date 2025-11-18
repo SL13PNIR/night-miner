@@ -78,6 +78,12 @@ class NavigationAction(Enum):
     RETRY = "retry"
 
 
+class OperationMode(Enum):
+    """Operation modes for consolidation."""
+    CONSOLIDATE = "consolidate"
+    REMOVE_CONSOLIDATIONS = "remove"
+
+
 # ==============================================================================
 # Bech32 Utilities (Pure Python Implementation)
 # ==============================================================================
@@ -247,10 +253,23 @@ class APIClient:
                 )
 
             elif response.status_code == 409:
+                # Try to extract donation ID from 409 response
+                donation_id = None
+                try:
+                    error_data = response.json()
+                    donation_id = error_data.get('donation_id', None)
+                    # Also check common alternative field names
+                    if not donation_id:
+                        donation_id = error_data.get('id', None)
+                    if not donation_id:
+                        donation_id = error_data.get('consolidation_id', None)
+                except Exception:
+                    pass
+
                 return ConsolidationResult(
                     index=0, address=source, success=True,
                     message="Already consolidated (previous assignment active)",
-                    donation_id=None
+                    donation_id=donation_id
                 )
 
             elif response.status_code == 400:
@@ -585,6 +604,7 @@ class ConsolidationController:
         self.addresses = []
         self.destination = None
         self.consolidation_records = []
+        self.operation_mode = None
 
     def run(self):
         """Main application entry point."""
@@ -620,6 +640,11 @@ class ConsolidationController:
                     if not self.nav.pop_state():
                         return False
 
+            elif self.nav.current_state == "select_operation_mode":
+                if not self.select_operation_mode():
+                    if not self.nav.pop_state():
+                        return False
+
             elif self.nav.current_state == "select_destination":
                 if not self.select_destination():
                     if not self.nav.pop_state():
@@ -643,14 +668,18 @@ class ConsolidationController:
         print("  Continue with Another Wallet?".center(70))
         print("=" * 70)
 
-        if self.ui.prompt_confirmation("\nWould you like to consolidate another wallet"):
-            # Reset addresses but potentially keep destination
+        if self.ui.prompt_confirmation("\nWould you like to process another wallet"):
+            # Check current mode before resetting
+            was_consolidate_mode = self.operation_mode == OperationMode.CONSOLIDATE
+
+            # Reset addresses and operation mode
             self.addresses = []
             self.wallet_manager = None
             self.wallet_dir = None
+            self.operation_mode = None
 
-            # Ask about destination address
-            if self.destination:
+            # Ask about destination address only if previous operation was consolidate mode
+            if self.destination and was_consolidate_mode:
                 print(f"\nCurrent destination: {self.destination[:40]}...")
                 if self.ui.prompt_confirmation("Use the same destination address"):
                     # Keep the current destination
@@ -661,6 +690,11 @@ class ConsolidationController:
                     self.destination = None
                     self.nav.reset()
                     self.nav.push_state("select_wallet")
+            else:
+                # Clear destination for new selection
+                self.destination = None
+                self.nav.reset()
+                self.nav.push_state("select_wallet")
             return True
         return False
 
@@ -668,19 +702,30 @@ class ConsolidationController:
         """Show welcome screen."""
         self.ui.display_header("NIGHT Miner Wallet Consolidation Tool")
 
-        print("This tool consolidates mining solutions from multiple addresses")
-        print("to a single destination address.\n")
+        print("This tool manages consolidation of mining rewards from multiple")
+        print("addresses. You can consolidate to a destination or remove existing")
+        print("consolidations.\n")
 
         print("REQUIREMENTS:")
         print("• All addresses must be registered at https://sm.midnight.gd")
-        print("• Destination must be unused on Cardano blockchain")
+        print("• For consolidation: destination must be unused on Cardano blockchain")
         print("• You must have control of all addresses\n")
+
+        print("MODES:")
+        print("• CONSOLIDATE - Assign earned rewards to a destination address")
+        print("• REMOVE CONSOLIDATIONS - Undo existing consolidations\n")
+
+        print("IMPORTANT:")
+        print("• You can continue mining on existing generated addresses")
+        print("• Consolidation assigns rewards earned in the past, present and future to the destination address")
+        print("• Rewards will not be assigned to the destination address until after the mining period is over")
+        print("• Rewards must be redeemed manually on the website during the redemption period\n")
 
         print("PROCESS:")
         print("1. Select wallet folder")
-        print("2. Enter destination address")
-        print("3. Review consolidation plan")
-        print("4. Execute consolidation\n")
+        print("2. Choose operation mode")
+        print("3. Enter destination (if consolidating)")
+        print("4. Review and execute\n")
 
         if self.ui.prompt_confirmation("Continue"):
             self.nav.push_state("select_wallet")
@@ -720,18 +765,49 @@ class ConsolidationController:
 
         print(f"\nFound {len(self.addresses)} address(es)")
 
-        # If destination is already set, skip to confirmation
-        if self.destination:
-            self.nav.push_state("confirm_plan")
-        else:
-            self.nav.push_state("select_destination")
+        # Always ask for operation mode after wallet selection
+        self.nav.push_state("select_operation_mode")
         return True
+
+    def select_operation_mode(self) -> bool:
+        """Select operation mode: consolidate or remove consolidations."""
+        self.ui.display_header("Select Operation Mode")
+
+        print("Choose an operation:")
+        print("\n1. CONSOLIDATE - Assign earned rewards to a destination address")
+        print("   All current and future rewards will be assigned to the destination.")
+        print("\n2. REMOVE CONSOLIDATIONS - Undo existing consolidations")
+        print("   Returns reward assignments to their original addresses (origin = destination).")
+        print()
+
+        while True:
+            choice = input("Enter choice (1/2 or 'back'): ").strip()
+
+            if choice.lower() == 'back':
+                return False
+
+            if choice == '1':
+                self.operation_mode = OperationMode.CONSOLIDATE
+                # If destination is already set from previous operation, skip to confirmation
+                if self.destination:
+                    self.nav.push_state("confirm_plan")
+                else:
+                    self.nav.push_state("select_destination")
+                return True
+            elif choice == '2':
+                self.operation_mode = OperationMode.REMOVE_CONSOLIDATIONS
+                # For remove mode, destination is automatically handled (same as origin)
+                self.destination = None  # Clear any previous destination
+                self.nav.push_state("confirm_plan")
+                return True
+            else:
+                print("Invalid choice. Please enter 1 or 2.")
 
     def select_destination(self) -> bool:
         """Select and validate destination address."""
         self.ui.display_header("Enter Destination Address")
 
-        print("Enter the Cardano address where solutions will be consolidated.")
+        print("Enter the Cardano address where rewards will be assigned.")
         print("The address must:")
         print("• Start with 'addr1'")
         print("• Have no transaction history")
@@ -791,87 +867,157 @@ class ConsolidationController:
 
     def confirm_plan(self) -> bool:
         """Display and confirm consolidation plan."""
-        self.ui.display_header("Review Consolidation Plan")
+        if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+            self.ui.display_header("Review Remove Consolidations Plan")
 
-        print(f"Wallet:      {self.wallet_dir}")
-        print(f"Destination: {self.destination}\n")
+            print(f"Wallet: {self.wallet_dir}\n")
+            print(f"Operation: REMOVE CONSOLIDATIONS")
+            print(f"Addresses to process: {len(self.addresses)}")
+            self.ui.display_separator()
 
-        print(f"Addresses to consolidate: {len(self.addresses)}")
-        self.ui.display_separator()
+            for addr in self.addresses[:5]:
+                print(f"  [{addr.index}] {addr.address[:40]}...")
+            if len(self.addresses) > 5:
+                print(f"  ... and {len(self.addresses) - 5} more")
 
-        for addr in self.addresses[:5]:
-            print(f"  [{addr.index}] {addr.address[:40]}...")
-        if len(self.addresses) > 5:
-            print(f"  ... and {len(self.addresses) - 5} more")
+            self.ui.display_separator()
+            print("\nThis will UNDO existing consolidations by setting origin = destination.")
+            print("Rewards will be assigned back to their original addresses.")
+            print("\n📁 A record of all successful operations will be saved.")
+            print("\nYou can retry any failed operations after the initial attempt.")
 
-        self.ui.display_separator()
-        print("\nThis will consolidate all current and future solutions to the destination.")
-        print("\n📁 A record of all successful consolidations will be saved with:")
-        print("   • Origin addresses")
-        print("   • Destination address")
-        print("   • Consolidation IDs")
-        print("\nYou can retry any failed consolidations after the initial attempt.")
+            confirm = input("\nType 'REMOVE' to proceed or 'back': ").strip()
 
-        confirm = input("\nType 'CONSOLIDATE' to proceed or 'back': ").strip()
+            if confirm == 'REMOVE':
+                self.nav.push_state("execute")
+                return True
+            elif confirm.lower() == 'back':
+                return False
 
-        if confirm == 'CONSOLIDATE':
-            self.nav.push_state("execute")
-            return True
-        elif confirm.lower() == 'back':
-            return False
+            print("Please type exactly 'REMOVE' to confirm.")
+            return self.confirm_plan()
 
-        print("Please type exactly 'CONSOLIDATE' to confirm.")
-        return self.confirm_plan()
+        else:  # CONSOLIDATE mode
+            self.ui.display_header("Review Consolidation Plan")
+
+            print(f"Wallet:      {self.wallet_dir}")
+            print(f"Destination: {self.destination}\n")
+
+            print(f"Addresses to consolidate: {len(self.addresses)}")
+            self.ui.display_separator()
+
+            for addr in self.addresses[:5]:
+                print(f"  [{addr.index}] {addr.address[:40]}...")
+            if len(self.addresses) > 5:
+                print(f"  ... and {len(self.addresses) - 5} more")
+
+            self.ui.display_separator()
+            print("\nThis will assign all current and future rewards to the destination.")
+            print("Rewards are earned after mining period ends and must be redeemed separately.")
+            print("\n📁 A record of all successful consolidations will be saved with:")
+            print("   • Origin addresses")
+            print("   • Destination address")
+            print("   • Consolidation IDs")
+            print("\nYou can retry any failed consolidations after the initial attempt.")
+
+            confirm = input("\nType 'CONSOLIDATE' to proceed or 'back': ").strip()
+
+            if confirm == 'CONSOLIDATE':
+                self.nav.push_state("execute")
+                return True
+            elif confirm.lower() == 'back':
+                return False
+
+            print("Please type exactly 'CONSOLIDATE' to confirm.")
+            return self.confirm_plan()
 
     def save_consolidation_records(self, results: List[ConsolidationResult]) -> Optional[str]:
         """Save consolidation records."""
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        txt_file = f"consolidation_records_{timestamp}.txt"
+
+        if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+            txt_file = f"remove_consolidation_records_{timestamp}.txt"
+        else:
+            txt_file = f"consolidation_records_{timestamp}.txt"
 
         records = []
         for r in results:
             if r.success and r.donation_id:
-                records.append({
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "origin_address": r.address,
-                    "destination_address": self.destination,
-                    "consolidation_id": r.donation_id
-                })
+                if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+                    records.append({
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "address": r.address,
+                        "consolidation_id": r.donation_id
+                    })
+                else:
+                    records.append({
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "origin_address": r.address,
+                        "destination_address": self.destination,
+                        "consolidation_id": r.donation_id
+                    })
 
         if records:
-
             # Save TXT file (for end users)
             txt_path = os.path.abspath(txt_file)
             with open(txt_path, 'w') as f:
                 f.write("=" * 70 + "\n")
-                f.write("NIGHT Miner - Consolidation Records\n")
-                f.write("=" * 70 + "\n\n")
-                f.write(f"Consolidation Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Destination Address: {self.destination}\n")
-                f.write(f"Total Consolidated: {len(records)} address(es)\n\n")
-                f.write("=" * 70 + "\n")
-                f.write("Consolidation Details\n")
-                f.write("=" * 70 + "\n\n")
 
-                for i, record in enumerate(records, 1):
-                    f.write(f"[{i}] Origin Address:\n")
-                    f.write(f"    {record['origin_address']}\n\n")
-                    f.write(f"    Consolidation ID: {record['consolidation_id']}\n")
-                    f.write(f"    Timestamp: {record['timestamp']}\n\n")
-                    f.write("-" * 70 + "\n\n")
+                if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+                    f.write("NIGHT Miner - Remove Consolidation Records\n")
+                    f.write("=" * 70 + "\n\n")
+                    f.write(f"Operation Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Total Removed: {len(records)} address(es)\n\n")
+                    f.write("=" * 70 + "\n")
+                    f.write("Remove Consolidation Details\n")
+                    f.write("=" * 70 + "\n\n")
 
-                f.write("=" * 70 + "\n")
-                f.write("IMPORTANT NOTES:\n")
-                f.write("=" * 70 + "\n\n")
-                f.write("• All current and future solutions from the origin addresses will\n")
-                f.write("  accumulate at the destination address.\n\n")
-                f.write("• Keep this record for your reference.\n\n")
+                    for i, record in enumerate(records, 1):
+                        f.write(f"[{i}] Address:\n")
+                        f.write(f"    {record['address']}\n\n")
+                        f.write(f"    Operation ID: {record['consolidation_id']}\n")
+                        f.write(f"    Timestamp: {record['timestamp']}\n\n")
+                        f.write("-" * 70 + "\n\n")
+
+                    f.write("=" * 70 + "\n")
+                    f.write("IMPORTANT NOTES:\n")
+                    f.write("=" * 70 + "\n\n")
+                    f.write("• Consolidations have been removed. Rewards will now\n")
+                    f.write("  be assigned to their original addresses.\n\n")
+                    f.write("• Rewards are earned after mining period ends.\n\n")
+                    f.write("• You must redeem rewards separately.\n\n")
+                    f.write("• Keep this record for your reference.\n\n")
+                else:
+                    f.write("NIGHT Miner - Consolidation Records\n")
+                    f.write("=" * 70 + "\n\n")
+                    f.write(f"Consolidation Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Destination Address: {self.destination}\n")
+                    f.write(f"Total Consolidated: {len(records)} address(es)\n\n")
+                    f.write("=" * 70 + "\n")
+                    f.write("Consolidation Details\n")
+                    f.write("=" * 70 + "\n\n")
+
+                    for i, record in enumerate(records, 1):
+                        f.write(f"[{i}] Origin Address:\n")
+                        f.write(f"    {record['origin_address']}\n\n")
+                        f.write(f"    Consolidation ID: {record['consolidation_id']}\n")
+                        f.write(f"    Timestamp: {record['timestamp']}\n\n")
+                        f.write("-" * 70 + "\n\n")
+
+                    f.write("=" * 70 + "\n")
+                    f.write("IMPORTANT NOTES:\n")
+                    f.write("=" * 70 + "\n\n")
+                    f.write("• All current and future rewards from the origin addresses will\n")
+                    f.write("  be assigned to the destination address.\n\n")
+                    f.write("• Rewards are earned after mining period ends.\n\n")
+                    f.write("• You must redeem rewards separately at the destination address.\n\n")
+                    f.write("• Keep this record for your reference.\n\n")
 
             return txt_path  # Return the text file path as it's more user-friendly
         return None
 
     def process_address(self, addr: Address) -> ConsolidationResult:
-        """Process a single address for consolidation."""
+        """Process a single address for consolidation or removal."""
         # Check registration
         is_registered, reg_msg, _ = self.api_client.check_registration(
             addr.address
@@ -888,16 +1034,26 @@ class ConsolidationController:
             )
 
         try:
+            # Determine destination based on operation mode
+            if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+                destination = addr.address  # Same as origin to remove consolidation
+            else:
+                destination = self.destination
+
             # Sign message
             print("  Signing message...")
             signature = self.wallet_manager.sign_message(
-                self.destination, addr
+                destination, addr
             )
 
-            # Consolidate
-            print("  Consolidating...")
+            # Consolidate or remove
+            if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+                print("  Removing consolidation...")
+            else:
+                print("  Consolidating...")
+
             result = self.api_client.consolidate_solutions(
-                self.destination, addr.address, signature
+                destination, addr.address, signature
             )
             result.index = addr.index
 
@@ -923,7 +1079,10 @@ class ConsolidationController:
 
     def execute_consolidation_with_retry(self):
         """Execute the consolidation process with retry option."""
-        self.ui.display_header("Executing Consolidation")
+        if self.operation_mode == OperationMode.REMOVE_CONSOLIDATIONS:
+            self.ui.display_header("Executing Remove Consolidations")
+        else:
+            self.ui.display_header("Executing Consolidation")
 
         results = []
 
@@ -956,6 +1115,19 @@ class ConsolidationController:
 
             if self.ui.prompt_confirmation(f"\n{len(failed)} address(es) failed. Would you like to retry"):
                 self.retry_failed_addresses(failed, results)
+
+        # Offer undo option for successful consolidations (not for remove operations)
+        if self.operation_mode == OperationMode.CONSOLIDATE:
+            successful = [r for r in results if r.success]
+            if successful:
+                print("\n" + "=" * 70)
+                print("  Undo Consolidation".center(70))
+                print("=" * 70)
+                print("\nYou can undo this consolidation, which will remove the reward assignment")
+                print("and return rewards to their original addresses.")
+
+                if self.ui.prompt_confirmation("\nWould you like to undo this consolidation"):
+                    self.undo_consolidation(results)
 
     def retry_failed_addresses(self, failed_results: List[ConsolidationResult], all_results: List[ConsolidationResult]):
         """Retry failed addresses."""
@@ -1003,6 +1175,104 @@ class ConsolidationController:
             if new_results:  # Only show success message if we actually retried something
                 print("\n✅ All retried addresses processed successfully!")
 
+    def undo_consolidation(self, original_results: List[ConsolidationResult]):
+        """Undo a consolidation by removing assignments (origin = destination)."""
+        self.ui.display_header("Undoing Consolidation")
+
+        # Get addresses that were successfully consolidated
+        successful_consolidations = [r for r in original_results if r.success]
+
+        if not successful_consolidations:
+            print("No successful consolidations to undo.")
+            return
+
+        print(f"Undoing {len(successful_consolidations)} consolidation(s)...\n")
+
+        undo_results = []
+
+        for i, orig_result in enumerate(successful_consolidations):
+            # Find the corresponding address
+            addr = None
+            for a in self.addresses:
+                if a.index == orig_result.index:
+                    addr = a
+                    break
+
+            if not addr:
+                continue
+
+            self.ui.display_progress(
+                i + 1, len(successful_consolidations),
+                f"Undoing {addr.address[:40]}..."
+            )
+
+            try:
+                # Sign message with origin = destination (same address)
+                print("  Signing message...")
+                signature = self.wallet_manager.sign_message(
+                    addr.address, addr
+                )
+
+                # Call API with origin = destination to undo
+                print("  Removing consolidation...")
+                result = self.api_client.consolidate_solutions(
+                    addr.address, addr.address, signature
+                )
+                result.index = addr.index
+
+                if result.success:
+                    if result.donation_id:
+                        print(f"  ✅ {result.message} (ID: {result.donation_id})")
+                    else:
+                        print(f"  ✅ {result.message}")
+                else:
+                    print(f"  ❌ {result.message}")
+
+                undo_results.append(result)
+
+            except Exception as e:
+                print(f"  ❌ Error: {e}")
+                undo_results.append(ConsolidationResult(
+                    index=addr.index,
+                    address=addr.address,
+                    success=False,
+                    message=str(e),
+                    skipped_reason="error"
+                ))
+
+            # Delay between operations
+            if i < len(successful_consolidations) - 1:
+                time.sleep(CONFIG["api_call_delay"])
+
+        # Display summary
+        print("\n" + "=" * 70)
+        print("  Undo Summary".center(70))
+        print("=" * 70)
+
+        successful_undos = [r for r in undo_results if r.success]
+        failed_undos = [r for r in undo_results if not r.success]
+
+        print(f"\nTotal undos attempted: {len(undo_results)}")
+        print(f"Successful:            {len(successful_undos)}")
+        print(f"Failed:                {len(failed_undos)}")
+
+        if successful_undos:
+            print("\nSuccessfully undone:")
+            for r in successful_undos:
+                if r.donation_id:
+                    print(f"  ✅ [{r.index}] {r.address[:40]}...")
+                    print(f"     ID: {r.donation_id}")
+                else:
+                    print(f"  ✅ [{r.index}] {r.address[:40]}...")
+
+        if failed_undos:
+            print("\nFailed to undo:")
+            for r in failed_undos:
+                print(f"  ❌ [{r.index}] {r.address[:40]}...")
+                print(f"     Reason: {r.message}")
+
+        print("\n" + "=" * 70)
+
 
 # ==============================================================================
 # Entry Point
@@ -1015,5 +1285,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
