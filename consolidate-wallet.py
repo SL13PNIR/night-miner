@@ -26,7 +26,7 @@ from tkinter import filedialog
 
 # Configuration
 CONFIG = {
-    "statistics_api_base": "https://sm.midnight.gd/api",
+    "statistics_api_base": "https://scavenger.prod.gd.midnighttge.io",
     "donation_api_base": "https://scavenger.prod.gd.midnighttge.io",
     "api_call_delay": 2,
     "default_wallet_dir": "auto-mine-wallet",
@@ -1619,3 +1619,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
