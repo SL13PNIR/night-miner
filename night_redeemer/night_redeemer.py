@@ -562,8 +562,11 @@ class MidnightClient:
         self.base_url = MIDNIGHT_API_BASE
         self.session = LoggingSession("Midnight")
         self.session.update_headers({
+            "Accept": "application/json",
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Origin": "https://tge.midnight.network",
+            "Referer": "https://tge.midnight.network/",
         })
         logger.info("MidnightClient initialized")
 
