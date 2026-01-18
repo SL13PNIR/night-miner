@@ -14,6 +14,19 @@ If you mined NIGHT tokens but didn't consolidate your mining wallet before the a
 
 ---
 
+## Developer Note
+
+> **Please read this README thoroughly before using the tool.**
+>
+> I developed and tested this tool using a single unconsolidated mining address on Linux. Testing requires unconsolidated mining addresses and real ADA on mainnet, so extensive multi-address testing was not feasible. I am providing this tool as a courtesy to fellow miners who missed the consolidation window.
+>
+> **I cannot guarantee it will work perfectly in all situations, and I am unable to provide extensive support.**
+>
+> If you encounter issues or prefer not to use this tool, you can always import your mining wallet keys (`.skey` files) into [Eternl](https://eternl.io) and redeem your tokens manually through the official [redemption portal](https://redeem.midnight.gd/). This manual method will always work.
+
+
+---
+
 ## What You Need
 
 Before you start, make sure you have:
@@ -298,4 +311,4 @@ All transaction signing happens locally on your computer.
 
 ## Questions?
 
-Open an issue on this repository if you run into problems.
+Open an issue on this repository if you run into problems or post on the [Midnight subreddit](https://www.reddit.com/r/Midnight).
