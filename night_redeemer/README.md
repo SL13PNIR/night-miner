@@ -18,12 +18,11 @@ If you mined NIGHT tokens but didn't consolidate your mining wallet before the a
 
 > **Please read this README thoroughly before using the tool.**
 >
-> I developed and tested this tool using a single unconsolidated mining address on Linux. Testing requires unconsolidated mining addresses and real ADA on mainnet, so extensive multi-address testing was not feasible. I am providing this tool as a courtesy to fellow miners who missed the consolidation window.
+> I developed and tested this tool using a single unconsolidated mining address on Linux. Testing requires real ADA on mainnet, so extensive multi-address testing was not feasible. I am providing this tool as a courtesy to fellow miners who missed the consolidation window.
 >
 > **I cannot guarantee it will work perfectly in all situations, and I am unable to provide extensive support.**
 >
-> If you encounter issues or prefer not to use this tool, you can always import your mining wallet keys (`.skey` files) into [Eternl](https://eternl.io) and redeem your tokens manually through the official [redemption portal](https://redeem.midnight.gd/). This manual method will always work.
-
+> If you encounter issues or prefer not to use this tool, you can always import your mining wallet keys (`.skey` files) into [Eternl](https://eternl.io) and redeem your tokens manually through the official portal. This manual method will always work.
 
 ---
 
@@ -75,7 +74,7 @@ sudo dnf install python3 python3-pip
 
 ## Step 2: Download This Tool
 
-1. Click the green **"Code"** button at the top of this page
+1. Click the green **"Code"** button at the top of the main night-miner main page
 2. Click **"[Download ZIP](https://github.com/SL13PNIR/night-miner/archive/refs/heads/main.zip)"** 
 3. Extract the ZIP file somewhere you'll remember (like your Desktop or Documents)
 *Note: This will download all files, including the mining files and old consolidation tool. **We are only interested in the "night_redeemer" folder.***
@@ -168,7 +167,7 @@ When you run it, you'll see this menu:
 
 3. Send some ADA to your fee wallet address (shown in Settings)
    - Start with 5-10 ADA
-   - You'll need ~3.5 ADA per address to redeem
+   - You'll need ~3.25 ADA per address to redeem
 
 ### Menu Options Explained
 
@@ -197,6 +196,57 @@ When "Upcoming Thaws" in View Schedules is empty, all your tokens are ready!
 
 ---
 
+## After Redemption: What to Expect
+
+When you redeem tokens, you may see **two UTXOs** appear for each mining address:
+
+1. **Thawed tokens** → Sent directly to your mining address (spendable immediately)
+2. **Locked tokens** → Held at a script address (unavailable until they thaw)
+
+**Don't panic if you see tokens at an unfamiliar address with "unavailable" balance!** This is normal.
+
+### Understanding the Script Address
+
+The script address (starts with `addr1z...` instead of `addr1q...`) shares the same stake key as your mining address, which is why it appears in your wallet. However, it's controlled by a Plutus smart contract, not your private key.
+
+**Example from a real redemption:**
+
+| Destination | NIGHT | ADA | Description |
+|-------------|-------|-----|-------------|
+| Mining address (`addr1q...`) | 1.42 | 1.16 | Thaw #1 - spendable now |
+| Script address (`addr1z...`) | 4.25 | 1.66 | Thaws #2-4 - locked until dates |
+| Network fee | - | ~0.42 | Actual transaction fee |
+| **Total from fee wallet** | | **~3.24** | |
+
+### Why a Script Address?
+
+The script address appears to be a time-lock contract. The likely purpose:
+
+- **Trustless vesting**: Once redeemed, your future tokens are on-chain. Even if Midnight's portal goes offline, the tokens are locked in a smart contract that will release them when the thaw dates pass.
+- **One-time interaction with Midnight**: The initial redemption is the only time Midnight's API is required. Future claims from the script may only require interacting with the Cardano blockchain.
+
+### Speculation: Future Redemption Costs
+
+> **Note:** The following is speculation based on observed behavior and general Cardano patterns. It cannot be verified without testing another thaw redemption.
+
+The ADA sent to the script address (~1.66 ADA in the example) is locked with your future tokens. When those thaws unlock, this ADA may cover the fees for claiming them - meaning **future redemptions might require little to no additional ADA from your fee wallet**.
+
+If this is correct, the recommendation to "wait for all tokens to thaw" may be less critical from a fee perspective than initially stated. However, until this is tested, the safest approach is still to wait if possible.
+
+### Verifying Your Locked Tokens
+
+You can check the thaw schedule for any address:
+
+```
+https://mainnet.prod.gd.midnighttge.io/thaws/YOUR_ADDRESS/schedule
+```
+
+Replace `YOUR_ADDRESS` with your mining address (starts with `addr1...`).
+
+The NIGHT amounts shown should match what you see at the script address.
+
+---
+
 ## Folder Structure
 
 After setup:
@@ -222,22 +272,26 @@ After setup:
 
 ## Transaction Costs
 
-**You're not losing 3.5 ADA per address!** Here's how costs actually work:
+Here's how costs work:
 
-### Redemption (~3.5 ADA per address)
+### Redemption (~3.25 ADA per address)
 
-On Cardano, tokens can't travel alone - they must be attached to a small amount of ADA (called "min UTxO"). When you redeem NIGHT tokens:
+On Cardano, tokens can't exist alone - they must be attached to ADA (called "min UTxO"). When you redeem NIGHT tokens:
 
-- **~3.2 ADA** travels WITH your tokens (you keep this!)
-- **~0.3 ADA** is the actual network fee (this is spent)
+- **~2.8 ADA** travels with your tokens
+- **~0.45 ADA** is the network fee
 
-So while you need ~3.5 ADA available per address, most of it stays with your NIGHT tokens. After redemption, each mining address will hold NIGHT + ~3.2 ADA.
+The ADA that travels with tokens is split between:
+- Your mining address (with thawed tokens)
+- The script address (with locked future tokens)
+
+So while you need ~3.2 ADA available per address, most of it stays with your NIGHT tokens.
 
 ### Consolidation (~0.5 ADA per address)
 
 When consolidating, you're moving tokens that already have ADA attached:
 
-- The ~3.2 ADA from each mining address helps pay for consolidation
+- The ADA at each mining address helps pay for consolidation
 - You only need ~0.5 ADA extra per address from your fee wallet
 - After consolidating, all your NIGHT + attached ADA ends up at your destination
 
@@ -245,9 +299,9 @@ When consolidating, you're moving tokens that already have ADA attached:
 
 | Step | Fee Wallet Needed | What Happens |
 |------|-------------------|--------------|
-| Redeem | ~350 ADA | ~320 ADA travels with tokens, ~30 ADA in fees |
+| Redeem | ~325 ADA | ~280 ADA travels with tokens, ~45 ADA in fees |
 | Consolidate | ~50 ADA | Mining address ADA offsets most of this |
-| **Total fees** | | **~80 ADA actual cost** (not 400 ADA!) |
+| **Total fees** | | **~95 ADA** |
 
 The rest of your ADA ends up at your destination wallet along with your NIGHT.
 
