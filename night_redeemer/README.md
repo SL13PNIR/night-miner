@@ -18,7 +18,7 @@ If you mined NIGHT tokens but didn't consolidate your mining wallet before the a
 
 > **Please read this README thoroughly before using the tool.**
 >
-> I developed and tested this tool using a single unconsolidated mining address I had missed on Linux. Thorough testing would require both multiple mining addresses and real ADA on mainnet, so extensive multi-address testing has not been done with this tool. I am providing this tool as a courtesy to fellow miners who missed the consolidation window, since it's not something I personally need, I do not plan to invest further time or money into it's development.
+> I developed and tested this tool on Linux only, using a single unconsolidated mining address I had missed. Thorough testing would require both multiple mining addresses and real ADA on mainnet, so extensive multi-address testing has not been done with this tool. I am providing this tool as a courtesy to fellow miners who missed the consolidation window, since it's not something I personally need, I do not plan to invest further time or money into it's development.
 >
 > **I cannot guarantee it will work perfectly in all situations.**
 >
