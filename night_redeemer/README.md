@@ -18,9 +18,9 @@ If you mined NIGHT tokens but didn't consolidate your mining wallet before the a
 
 > **Please read this README thoroughly before using the tool.**
 >
-> I developed and tested this tool using a single unconsolidated mining address on Linux. Testing requires real ADA on mainnet, so extensive multi-address testing was not feasible. I am providing this tool as a courtesy to fellow miners who missed the consolidation window.
+> I developed and tested this tool using a single unconsolidated mining address I had missed on Linux. Thorough testing would require both multiple mining addresses and real ADA on mainnet, so extensive multi-address testing has not been done with this tool. I am providing this tool as a courtesy to fellow miners who missed the consolidation window, since it's not something I personally need, I do not plan to invest further time or money into it's development.
 >
-> **I cannot guarantee it will work perfectly in all situations, and I am unable to provide extensive support.**
+> **I cannot guarantee it will work perfectly in all situations.**
 >
 > If you encounter issues or prefer not to use this tool, you can always import your mining wallet keys (`.skey` files) into [Eternl](https://eternl.io) and redeem your tokens manually through the official portal. This manual method will always work.
 
@@ -33,7 +33,7 @@ Before you start, make sure you have:
 - [ ] Your **mining wallet files** (`addr-0.addr`, `addr-0.skey`, etc.)
 - [ ] **Python** installed (see Step 1 below)
 - [ ] A **Blockfrost API key** (free - the tool will guide you)
-- [ ] Some **ADA** for transaction fees (~5 ADA to start)
+- [ ] Some **ADA** for transaction fees (I recommend you start with a minimal amount like 5-10 ADA to make sure the tool workflow works for you)
 
 ---
 
