@@ -1,0 +1,141 @@
+================================================================================
+                           SETUP FILES FOLDER
+              (Night Miner Token Redeemer)
+================================================================================
+
+This folder contains the SETUP files for installing the tool.
+
+DO NOT RUN THE TOOL FROM HERE!
+
+
+================================================================================
+                              QUICK START
+================================================================================
+
+STEP 1: RUN SETUP
+-----------------
+Run the setup script for your operating system:
+
+  Windows:    Double-click setup-windows.bat
+  Linux/Mac:  Run ./setup-linux-mac.sh
+
+This creates a "night-redeemer" folder with everything installed.
+
+
+STEP 2: ADD YOUR WALLET FILES
+-----------------------------
+Copy your mining wallet files into night-redeemer/mining-wallet/:
+
+  - addr-0.addr, addr-0.skey
+  - addr-1.addr, addr-1.skey
+  - ... (all your mining addresses)
+
+These are the files you created when setting up Midnight mining.
+
+
+STEP 3: RUN THE TOOL
+--------------------
+Go to the night-redeemer folder and run:
+
+  Windows:    Double-click run.bat
+  Linux/Mac:  Run ./run.sh
+
+
+STEP 4: FIRST-TIME SETUP (IN THE TOOL)
+--------------------------------------
+The tool will guide you through:
+
+  1. Getting a Blockfrost API key (free, takes 2 minutes)
+  2. Creating a fee wallet
+  3. Sending ADA to your fee wallet for transaction fees
+
+
+================================================================================
+                           RECOMMENDED WORKFLOW
+================================================================================
+
+IMPORTANT: WAIT FOR ALL TOKENS TO THAW BEFORE REDEEMING OR CONSOLIDATING!
+--------------------------------------------------------------------------
+Each redemption and consolidation requires ADA from your fee wallet. You pay
+these costs EACH TIME you run the operation.
+
+If you have 100 mining addresses:
+  - Redeeming twice (partial, then rest) = pay twice
+  - Redeeming once (when 100% thawed)    = pay once
+
+  - Consolidating twice = pay twice
+  - Consolidating once  = pay once
+
+WAIT until ALL tokens have thawed, redeem everything, THEN consolidate once.
+
+NOTE: Most of the ADA used for redemption travels WITH your tokens (you keep
+it). See README.md for full cost breakdown.
+
+
+HOW TO CHECK YOUR THAW STATUS:
+------------------------------
+  1. Run the tool
+  2. Select [1] Refresh Schedules - fetches latest data from blockchain
+  3. Select [2] View Schedules - shows when each batch thaws
+
+The tool shows:
+  - "Redeemable Now" - tokens ready to claim
+  - "Upcoming Thaws" - tokens still locked with unlock dates
+
+When "Upcoming Thaws" is empty, ALL your tokens are ready!
+
+
+WHEN TO REDEEM:
+---------------
+  - BEST:   Wait until 100% of tokens are thawed (one redemption, lowest fees)
+  - OK:     Redeem in large batches (e.g., when 50% thawed, then remaining 50%)
+  - AVOID:  Redeeming small amounts frequently (wastes ADA on repeat fees)
+
+
+WHEN TO CONSOLIDATE:
+--------------------
+  - BEST:   After ALL tokens are redeemed (consolidate once, lowest fees)
+  - AVOID:  Consolidating after each partial redemption (wastes ADA)
+
+
+TYPICAL WORKFLOW (FOR LOWEST FEES):
+-----------------------------------
+  1. [1] Refresh Schedules     - Check current status
+  2. [2] View Schedules        - See what's redeemable vs upcoming
+  3. Wait until all thawed...  - Check back periodically (days/weeks)
+  4. [3] Redeem Tokens         - Batch redeem ALL tokens at once
+  5. [4] Consolidate           - Send ALL NIGHT to your main wallet (once)
+  6. Drain fee wallet          - Tool offers to send remaining ADA to destination
+
+Do steps 4, 5, and 6 only ONCE, after everything has thawed.
+
+
+================================================================================
+                              FILE STRUCTURE
+================================================================================
+
+WHY ARE THERE TWO night_redeemer.py FILES?
+------------------------------------------
+  - This folder:         Source file used during setup (don't run directly)
+  - night-redeemer/:     Installed copy with virtual environment (run this one)
+
+The setup script copies the file into an isolated installation with all
+dependencies properly configured.
+
+
+AFTER INSTALLATION:
+-------------------
+  night-redeemer/
+  ├── run.sh / run.bat    <- Run this to start the tool
+  ├── mining-wallet/      <- Your wallet keys go here
+  ├── fee-wallet/         <- Fee wallet (created by tool)
+  ├── logs/               <- Activity logs
+  └── venv/               <- Python environment (don't touch)
+
+
+REINSTALLING:
+-------------
+If you need to reinstall, delete the night-redeemer folder and run
+the setup script again.
+
+================================================================================
