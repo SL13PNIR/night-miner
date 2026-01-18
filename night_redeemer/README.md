@@ -103,6 +103,62 @@ Setup will create a `night-redeemer` folder with everything installed.
 
 ---
 
+## Alternative: Manual Installation
+
+If the setup scripts don't work or you prefer to set things up yourself:
+
+### 1. Create the folder structure
+
+```bash
+mkdir night-redeemer
+mkdir night-redeemer/mining-wallet
+mkdir night-redeemer/fee-wallet
+mkdir night-redeemer/logs
+```
+
+### 2. Copy the script
+
+Copy `night_redeemer.py` into the `night-redeemer` folder.
+
+### 3. Create a virtual environment
+
+```bash
+cd night-redeemer
+
+# Linux/Mac
+python3 -m venv venv
+source venv/bin/activate
+
+# Windows
+python -m venv venv
+venv\Scripts\activate
+```
+
+### 4. Install dependencies
+
+```bash
+pip install pycardano requests
+```
+
+### 5. Run the tool
+
+```bash
+# With venv activated:
+python night_redeemer.py
+```
+
+**Note:** You'll need to activate the virtual environment each time before running:
+```bash
+# Linux/Mac
+source venv/bin/activate
+
+# Windows
+venv\Scripts\activate
+```
+
+
+---
+
 ## Step 4: Add Your Mining Wallet
 
 Open the `night-redeemer` folder that was just created.
@@ -203,11 +259,11 @@ When you redeem tokens, you may see **two UTXOs** appear for each mining address
 1. **Thawed tokens** → Sent directly to your mining address (spendable immediately)
 2. **Locked tokens** → Held at a script address (unavailable until they thaw)
 
-**Don't panic if you see tokens at an unfamiliar address with "unavailable" balance!** This is normal.
+**Don't panic if you see tokens at an unfamiliar script address with "unavailable" balance!** This is normal:
 
 ### Understanding the Script Address
 
-The script address (starts with `addr1z...` instead of `addr1q...`) shares the same stake key as your mining address, which is why it appears in your wallet. However, it's controlled by a Plutus smart contract, not your private key.
+The script address (starts with `addr1z...` instead of `addr1q...`) shares the same stake key as your mining address, which is why it appears in your wallet if you view it in Eternl or on a blockchain explorer. However, it's controlled by a Plutus smart contract, not your private key.
 
 **Example from a real redemption:**
 
