@@ -123,7 +123,7 @@ BATCH_DELAY = 5
 
 # ADA thresholds (lovelace)
 MIN_BALANCE_TO_START = 5_000_000  # 5 ADA
-MIN_BALANCE_PER_REDEMPTION = 3_500_000  # ~3.5 ADA
+MIN_BALANCE_PER_REDEMPTION = 3_500_000  # ~3.5 ADA (conservative estimate for balance check)
 MIN_BALANCE_PER_CONSOLIDATION = 2_000_000  # ~2 ADA
 
 # NIGHT token identifiers
@@ -391,7 +391,7 @@ access to any ADA in this wallet. Back it up securely.
 
 COSTS:
 ------
-  Redeeming tokens:   ~3.5 ADA per mining address
+  Redeeming tokens:   ~3.25 ADA per mining address
   Consolidating:      ~0.5 ADA per address (offset by mining address ADA)
 
 Recommended: Keep 5-10 ADA in this wallet to start.
@@ -696,7 +696,7 @@ def find_wallet_addresses(wallet_dir: str) -> List[WalletAddress]:
 
             if skey_file.exists():
                 with open(addr_file, 'r') as f:
-                    address_str = f.read().strip().lower()
+                    address_str = f.read().strip()
 
                 addresses.append(WalletAddress(
                     index=index,
@@ -1315,12 +1315,15 @@ class NightManager:
                         thaws = schedule.get("thaws", [])
                         redeemable = sum(1 for t in thaws if t.get("status") == "redeemable")
                         upcoming = sum(1 for t in thaws if t.get("status") == "upcoming")
+                        confirmed = sum(1 for t in thaws if t.get("status") == "confirmed")
 
                         parts = []
                         if redeemable:
                             parts.append(f"{redeemable} redeemable")
                         if upcoming:
                             parts.append(f"{upcoming} upcoming")
+                        if confirmed:
+                            parts.append(f"{confirmed} redeemed")
                         print(" | ".join(parts) if parts else "no thaws")
 
                         self.thaw_data["addresses"][wa.address] = {
@@ -1384,6 +1387,7 @@ class NightManager:
         # Collect all thaws
         redeemable_list = []
         upcoming_list = []
+        confirmed_list = []
 
         for address, data in self.thaw_data.get("addresses", {}).items():
             if data.get("failed"):
@@ -1396,6 +1400,7 @@ class NightManager:
                 amount = thaw.get("amount", 0)
                 status = thaw.get("status", "")
                 thaw_date = thaw.get("thawing_period_start", "")[:10] or "Unknown"
+                tx_id = thaw.get("transaction_id")
 
                 entry = {
                     "address": address,
@@ -1403,12 +1408,15 @@ class NightManager:
                     "key_index": key_index,
                     "amount": amount,
                     "date": thaw_date,
+                    "tx_id": tx_id,
                 }
 
                 if status == "redeemable":
                     redeemable_list.append(entry)
                 elif status == "upcoming":
                     upcoming_list.append(entry)
+                elif status == "confirmed":
+                    confirmed_list.append(entry)
 
         # Sort upcoming by date
         upcoming_list.sort(key=lambda x: x["date"])
@@ -1457,6 +1465,22 @@ class NightManager:
         else:
             print("  None")
 
+        # Display confirmed (already redeemed)
+        if confirmed_list:
+            print()
+            print("=" * 55)
+            print("ALREADY REDEEMED")
+            print("=" * 55)
+
+            total_confirmed = 0
+            for entry in confirmed_list:
+                tx_short = entry["tx_id"][:16] + "..." if entry.get("tx_id") else "N/A"
+                print(f"  {entry['skey_file']}: {format_night(entry['amount'])} NIGHT")
+                print(f"    Date: {entry['date']} | TX: {tx_short}")
+                total_confirmed += entry["amount"]
+            print("-" * 55)
+            print(f"  Total redeemed: {format_night(total_confirmed)} NIGHT")
+
         print()
         input("\nPress Enter to return...")
 
@@ -1471,7 +1495,7 @@ class NightManager:
         print("=" * 55)
         print("IMPORTANT: Wait for ALL tokens to thaw before redeeming!")
         print("=" * 55)
-        print("Redemption costs ~3.5 ADA per address. If you redeem now and")
+        print("Redemption costs ~3.25 ADA per address. If you redeem now and")
         print("redeem again later when more tokens thaw, you pay DOUBLE the fees.")
         print()
         print("Use [2] View Schedules to check if you have upcoming thaws.")
