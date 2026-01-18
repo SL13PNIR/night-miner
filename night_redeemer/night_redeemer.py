@@ -928,6 +928,142 @@ def consolidate_single(source_address: str, destination_address: str, skey_path:
         return BatchResult(source_address, False, f"Build failed: {e}")
 
 
+def consolidate_batch(sources: List[Dict], destination_address: str,
+                      fee_wallet: FeeWallet, blockfrost: BlockfrostClient,
+                      wallet_dir: str) -> BatchResult:
+    """
+    Consolidate NIGHT from multiple addresses in a single transaction.
+
+    EXPERIMENTAL - UNTESTED
+
+    This function attempts to build one transaction with inputs from all source
+    addresses, potentially saving significant fees compared to one-by-one
+    consolidation.
+
+    Args:
+        sources: List of dicts with 'address' and 'skey_file' keys
+        destination_address: Where to send all NIGHT
+        fee_wallet: Fee wallet for transaction fees
+        blockfrost: Blockfrost client
+        wallet_dir: Path to wallet directory for finding skey files
+
+    Returns:
+        BatchResult with success/failure info
+    """
+    logger.info(f"BATCH consolidation: {len(sources)} addresses -> {truncate_address(destination_address)}")
+    logger.warning("Using EXPERIMENTAL batch consolidation (untested)")
+
+    # Gather all UTxOs and signing keys
+    all_utxos = []
+    all_skeys = []
+    total_night = 0
+    total_lovelace = 0
+
+    print(f"    Gathering UTxOs from {len(sources)} addresses...")
+
+    for src in sources:
+        address = src["address"]
+        skey_file = src.get("skey_file", "Unknown")
+
+        # Get UTxOs
+        utxos = blockfrost.get_address_utxos_with_assets(address)
+        if not utxos:
+            continue
+
+        for utxo in utxos:
+            total_lovelace += utxo["lovelace"]
+            for asset in utxo["assets"]:
+                if asset["policy_id"] == NIGHT_POLICY_ID:
+                    total_night += asset["quantity"]
+
+        all_utxos.append({"address": address, "utxos": utxos})
+
+        # Load signing key
+        skey_path = find_skey_path(skey_file, wallet_dir)
+        if not skey_path:
+            logger.error(f"Key not found: {skey_file}")
+            return BatchResult("batch", False, f"Key not found: {skey_file}")
+
+        try:
+            skey = load_signing_key_from_file(skey_path)
+            all_skeys.append(skey)
+        except Exception as e:
+            logger.error(f"Failed to load key {skey_file}: {e}")
+            return BatchResult("batch", False, f"Key load failed: {skey_file}")
+
+        time.sleep(0.2)  # Rate limiting
+
+    if total_night == 0:
+        return BatchResult("batch", False, "No NIGHT tokens found")
+
+    print(f"    Total: {format_ada(total_lovelace)} + {format_night(total_night)}")
+
+    # Load fee wallet
+    try:
+        if fee_wallet.signing_key is None:
+            fee_wallet.load()
+    except Exception as e:
+        logger.error(f"Fee wallet key load failed: {e}")
+        return BatchResult("batch", False, f"Fee wallet key load failed: {e}")
+
+    print(f"    Building transaction...", end=" ", flush=True)
+
+    try:
+        context = BlockFrostChainContext(project_id=blockfrost.api_key, network=Network.MAINNET)
+        builder = TransactionBuilder(context)
+
+        dest_addr = Address.from_primitive(destination_address)
+        fee_addr = Address.from_primitive(fee_wallet.get_address())
+
+        # Add all source addresses as inputs
+        for utxo_info in all_utxos:
+            source_addr = Address.from_primitive(utxo_info["address"])
+            builder.add_input_address(source_addr)
+
+        # Add fee wallet as input
+        builder.add_input_address(fee_addr)
+
+        # Build output with all NIGHT tokens
+        policy_id = ScriptHash.from_primitive(bytes.fromhex(NIGHT_POLICY_ID))
+        asset_name = AssetName(bytes.fromhex(NIGHT_ASSET_NAME))
+
+        multi_asset = MultiAsset()
+        multi_asset[policy_id] = Asset()
+        multi_asset[policy_id][asset_name] = total_night
+
+        # Output: 1.5 ADA + all NIGHT to destination
+        output_value = Value(1_500_000, multi_asset)
+        builder.add_output(TransactionOutput(dest_addr, output_value))
+
+        # Sign with all keys
+        all_signing_keys = all_skeys + [fee_wallet.signing_key]
+
+        signed_tx = builder.build_and_sign(
+            signing_keys=all_signing_keys,
+            change_address=fee_addr
+        )
+
+        print(f"submitting...", end=" ", flush=True)
+        tx_hash = blockfrost.submit_transaction(signed_tx.to_cbor())
+
+        if tx_hash:
+            logger.info(f"Batch consolidation successful: {tx_hash}")
+            return BatchResult("batch", True, "Success", tx_id=tx_hash, amount=total_night)
+        else:
+            return BatchResult("batch", False, "Submit failed")
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Batch consolidation failed: {e}", exc_info=True)
+        print(f"FAILED")
+
+        # Check for common errors
+        if "Maximum transaction size" in error_msg or "too large" in error_msg.lower():
+            return BatchResult("batch", False, "Transaction too large - try fewer addresses or use one-by-one mode")
+
+        return BatchResult("batch", False, f"Build failed: {e}")
+
+
 def drain_fee_wallet(destination_address: str, fee_wallet: FeeWallet,
                      blockfrost: BlockfrostClient) -> BatchResult:
     """Send all remaining ADA from fee wallet to destination."""
@@ -1725,10 +1861,37 @@ class NightManager:
             input("\nPress Enter to return...")
             return
 
+        # Choose consolidation mode
+        print("\n" + "=" * 55)
+        print("Choose consolidation mode:")
+        print("=" * 55)
+        print()
+        print("  [1] One-by-one (recommended)")
+        print("      - One transaction per address")
+        print("      - Tested and reliable")
+        print(f"      - Est. fee: ~{format_ada(len(consolidatable) * 500_000)}")
+        print()
+        print("  [2] Batched (EXPERIMENTAL - UNTESTED)")
+        print("      - All addresses in ONE transaction")
+        print("      - May fail if too many addresses (~20-50 max)")
+        print("      - Potential fee savings if it works")
+        print(f"      - Est. fee: ~{format_ada(500_000)} (single tx)")
+        print()
+        print("-" * 55)
+        print("NOTE: Batch mode has NOT been tested. If it fails,")
+        print("      use one-by-one mode instead. No funds are lost")
+        print("      if a transaction fails - it simply won't submit.")
+        print("-" * 55)
+        print()
+
+        mode_choice = input("Choice [1]: ").strip()
+        use_batch = mode_choice == "2"
+
         # Confirm
         print("\n" + "=" * 55)
         print(f"Destination: {truncate_address(destination, 45)}")
         print(f"Total NIGHT: {format_night(total_night)}")
+        print(f"Mode:        {'BATCHED (experimental)' if use_batch else 'One-by-one'}")
         print("=" * 55)
 
         confirm = input("Proceed? (type 'yes' to confirm): ").strip().lower()
@@ -1737,57 +1900,88 @@ class NightManager:
             input("\nPress Enter to return...")
             return
 
-        # Execute
-        logger.info(f"Starting consolidation: {len(consolidatable)} addresses -> {destination}")
-        print("\nStarting consolidation...")
-        print("=" * 55)
-
         results = []
 
-        try:
-            for i, addr_info in enumerate(consolidatable):
-                address = addr_info["address"]
-                skey_file = addr_info.get("skey_file", "Unknown")
+        if use_batch:
+            # EXPERIMENTAL: Batch consolidation
+            logger.info(f"Starting BATCH consolidation: {len(consolidatable)} addresses -> {destination}")
+            logger.warning("Using EXPERIMENTAL batch mode (untested)")
+            print("\n" + "=" * 55)
+            print("EXPERIMENTAL: Attempting batch consolidation...")
+            print("=" * 55)
+            print()
+            print("WARNING: This feature has NOT been tested!")
+            print("If it fails, your funds are safe - just use one-by-one mode.")
+            print()
 
-                balance = self.blockfrost.get_address_balance(self.fee_wallet.get_address())
-                if balance < MIN_BALANCE_PER_CONSOLIDATION:
-                    print(f"\n[STOPPING] Insufficient funds: {format_ada(balance)}")
-                    print(f"           Completed {i} of {len(consolidatable)}")
+            result = consolidate_batch(
+                consolidatable, destination,
+                self.fee_wallet, self.blockfrost,
+                self.config.wallet_dir
+            )
 
-                    for remaining in consolidatable[i:]:
-                        results.append(BatchResult(
-                            remaining["address"], False, "Skipped - insufficient funds",
-                            skey_file=remaining.get("skey_file")
-                        ))
-                    break
-
-                print(f"\n[{i+1}/{len(consolidatable)}] {skey_file}")
-                print(f"    Fee wallet: {format_ada(balance)}")
-
-                skey_path = find_skey_path(skey_file, self.config.wallet_dir)
-                if not skey_path:
-                    print(f"    FAILED: Key not found")
-                    results.append(BatchResult(address, False, "Key not found", skey_file=skey_file))
-                    continue
-
-                result = consolidate_single(
-                    address, destination, skey_path,
-                    self.fee_wallet, self.blockfrost
-                )
-                result.skey_file = skey_file
+            if result.success:
+                print(f"OK")
+                print(f"    TX: {result.tx_id}")
+                print(f"    Total: {format_night(result.amount)}")
+                results.append(result)
+            else:
+                print(f"\nBATCH FAILED: {result.message}")
+                print()
+                print("The batch transaction could not be completed.")
+                print("Your funds are safe. Try using one-by-one mode instead.")
                 results.append(result)
 
-                if result.success:
-                    print(f"OK")
-                    print(f"    TX: {result.tx_id[:24]}...")
-                else:
-                    print(f"    FAILED: {result.message}")
+        else:
+            # Standard one-by-one consolidation
+            logger.info(f"Starting consolidation: {len(consolidatable)} addresses -> {destination}")
+            print("\nStarting consolidation...")
+            print("=" * 55)
 
-                if i < len(consolidatable) - 1 and result.success:
-                    time.sleep(BATCH_DELAY)
+            try:
+                for i, addr_info in enumerate(consolidatable):
+                    address = addr_info["address"]
+                    skey_file = addr_info.get("skey_file", "Unknown")
 
-        except KeyboardInterrupt:
-            print("\n\nInterrupted.")
+                    balance = self.blockfrost.get_address_balance(self.fee_wallet.get_address())
+                    if balance < MIN_BALANCE_PER_CONSOLIDATION:
+                        print(f"\n[STOPPING] Insufficient funds: {format_ada(balance)}")
+                        print(f"           Completed {i} of {len(consolidatable)}")
+
+                        for remaining in consolidatable[i:]:
+                            results.append(BatchResult(
+                                remaining["address"], False, "Skipped - insufficient funds",
+                                skey_file=remaining.get("skey_file")
+                            ))
+                        break
+
+                    print(f"\n[{i+1}/{len(consolidatable)}] {skey_file}")
+                    print(f"    Fee wallet: {format_ada(balance)}")
+
+                    skey_path = find_skey_path(skey_file, self.config.wallet_dir)
+                    if not skey_path:
+                        print(f"    FAILED: Key not found")
+                        results.append(BatchResult(address, False, "Key not found", skey_file=skey_file))
+                        continue
+
+                    result = consolidate_single(
+                        address, destination, skey_path,
+                        self.fee_wallet, self.blockfrost
+                    )
+                    result.skey_file = skey_file
+                    results.append(result)
+
+                    if result.success:
+                        print(f"OK")
+                        print(f"    TX: {result.tx_id[:24]}...")
+                    else:
+                        print(f"    FAILED: {result.message}")
+
+                    if i < len(consolidatable) - 1 and result.success:
+                        time.sleep(BATCH_DELAY)
+
+            except KeyboardInterrupt:
+                print("\n\nInterrupted.")
 
         # Summary
         successful = [r for r in results if r.success]
