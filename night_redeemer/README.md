@@ -20,7 +20,7 @@ If you mined NIGHT tokens but didn't consolidate your mining wallet before the a
 >
 > I developed and tested this tool on Linux only, using a single unconsolidated mining address I had missed. Thorough testing would require both multiple mining addresses and real ADA on mainnet, so extensive multi-address testing has not been done with this tool. I am providing this tool as a courtesy to fellow miners who missed the consolidation window, since it's not something I personally need, I do not plan to invest further time or money into it's development.
 >
-> **I cannot guarantee it will work perfectly in all situations.**
+> **I cannot guarantee it will work perfectly in all situations, and I am unable to provide extensive support.**
 >
 > If you encounter issues or prefer not to use this tool, you can always import your mining wallet keys (`.skey` files) into [Eternl](https://eternl.io) and redeem your tokens manually through the official portal. This manual method will always work.
 
@@ -33,7 +33,7 @@ Before you start, make sure you have:
 - [ ] Your **mining wallet files** (`addr-0.addr`, `addr-0.skey`, etc.)
 - [ ] **Python** installed (see Step 1 below)
 - [ ] A **Blockfrost API key** (free - the tool will guide you)
-- [ ] Some **ADA** for transaction fees (I recommend you start with a minimal amount like 5-10 ADA to make sure the tool workflow works for you)
+- [ ] Some **ADA** for transaction fees (~5 ADA to start)
 
 ---
 
@@ -78,11 +78,12 @@ sudo dnf install python3 python3-pip
 2. Click **"[Download ZIP](https://github.com/SL13PNIR/night-miner/archive/refs/heads/main.zip)"** 
 3. Extract the ZIP file somewhere you'll remember (like your Desktop or Documents)
 *Note: This will download all files, including the mining files and old consolidation tool. **We are only interested in the "night_redeemer" folder.***
+
 ---
 
 ## Step 3: Run Setup
 
-Open the extracted folder. Inside the "night_redeemer" folder, you'll see:
+Open the extracted folder. You'll see:
 - `setup-linux-mac.sh` (for Linux/Mac)
 - `setup-windows.bat` (for Windows)
 - `night_redeemer.py`
@@ -155,7 +156,6 @@ source venv/bin/activate
 # Windows
 venv\Scripts\activate
 ```
-
 
 ---
 
@@ -232,8 +232,26 @@ When you run it, you'll see this menu:
 | **[1] Refresh Schedules** | Fetches the latest thaw data from the Midnight API for all your mining addresses. Shows which tokens are redeemable now vs still locked. |
 | **[2] View Schedules** | Displays your tokens organized by status: "Redeemable Now" and "Upcoming Thaws" (grouped by unlock date). |
 | **[3] Redeem Tokens** | Claims your thawed NIGHT tokens from all mining addresses that have redeemable tokens. |
-| **[4] Consolidate** | Sends all your redeemed NIGHT tokens from mining addresses to a single destination wallet. Also offers to send remaining fee wallet ADA to your destination. |
+| **[4] Consolidate** | Sends all your redeemed NIGHT tokens from mining addresses to a single destination wallet. Offers two modes: one-by-one (tested) or batched (experimental). Also offers to send remaining fee wallet ADA to your destination. |
 | **[5] Settings** | Configure wallet directory, Blockfrost API key, and fee wallet. You can also drain your fee wallet here. |
+
+### Consolidation Modes
+
+When consolidating, you can choose between two modes:
+
+**[1] One-by-one (recommended)**
+- Creates one transaction per mining address
+- Tested and reliable
+- Fee: ~0.17 ADA per address
+
+**[2] Batched (EXPERIMENTAL - UNTESTED)**
+- Attempts to consolidate ALL addresses in a single transaction
+- Potential fee savings: ~0.2-0.5 ADA total instead of ~0.17 ADA per address
+- May fail if you have too many addresses (~20-50 max due to transaction size limits)
+- If it fails, no funds are lost - the transaction simply won't submit
+- Use one-by-one mode if batch fails
+
+> **Note:** Batch mode has NOT been tested. It's provided as an option for users who want to try it, but use at your own discretion. The one-by-one mode is the safe, tested choice.
 
 ### Recommended Workflow
 
@@ -259,11 +277,11 @@ When you redeem tokens, you may see **two UTXOs** appear for each mining address
 1. **Thawed tokens** → Sent directly to your mining address (spendable immediately)
 2. **Locked tokens** → Held at a script address (unavailable until they thaw)
 
-**Don't panic if you see tokens at an unfamiliar script address with "unavailable" balance!** This is normal:
+**Don't panic if you see tokens at an unfamiliar address with "unavailable" balance!** This is normal.
 
 ### Understanding the Script Address
 
-The script address (starts with `addr1z...` instead of `addr1q...`) shares the same stake key as your mining address, which is why it appears in your wallet if you view it in Eternl or on a blockchain explorer. However, it's controlled by a Plutus smart contract, not your private key.
+The script address (starts with `addr1z...` instead of `addr1q...`) shares the same stake key as your mining address, which is why it appears in your wallet. However, it's controlled by a Plutus smart contract, not your private key.
 
 **Example from a real redemption:**
 
@@ -343,21 +361,34 @@ The ADA that travels with tokens is split between:
 
 So while you need ~3.2 ADA available per address, most of it stays with your NIGHT tokens.
 
-### Consolidation (~0.5 ADA per address)
+### Consolidation
 
 When consolidating, you're moving tokens that already have ADA attached:
 
 - The ADA at each mining address helps pay for consolidation
-- You only need ~0.5 ADA extra per address from your fee wallet
 - After consolidating, all your NIGHT + attached ADA ends up at your destination
+
+**One-by-one mode (tested):** ~0.17 ADA per address in transaction fees
+
+**Batch mode (experimental/untested):** ~0.2-0.5 ADA total for ALL addresses in one transaction. If it works, this could save significant fees. However, it may fail with many addresses due to transaction size limits.
 
 ### Example: 100 Mining Addresses
 
+**Using one-by-one consolidation (tested):**
+
 | Step | Fee Wallet Needed | What Happens |
 |------|-------------------|--------------|
-| Redeem | ~325 ADA | ~280 ADA travels with tokens, ~45 ADA in fees |
-| Consolidate | ~50 ADA | Mining address ADA offsets most of this |
-| **Total fees** | | **~95 ADA** |
+| Redeem | ~325 ADA | ~280 ADA travels with tokens, ~42 ADA in fees |
+| Consolidate | ~17 ADA | ~0.17 ADA fee per address |
+| **Total fees** | | **~59 ADA** |
+
+**Using batch consolidation (experimental - if it works):**
+
+| Step | Fee Wallet Needed | What Happens |
+|------|-------------------|--------------|
+| Redeem | ~325 ADA | ~280 ADA travels with tokens, ~42 ADA in fees |
+| Consolidate | ~0.5 ADA | Single transaction for all addresses |
+| **Total fees** | | **~42.5 ADA** |
 
 The rest of your ADA ends up at your destination wallet along with your NIGHT.
 
