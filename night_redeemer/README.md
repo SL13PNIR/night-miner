@@ -70,7 +70,7 @@ sudo dnf install python3 python3-pip
 
 ## Step 3: Run Setup
 
-Open the extracted folder. You'll see:
+Open the extracted folder. Inside the "night_redeemer" folder, you'll see:
 - `setup-linux-mac.sh` (for Linux/Mac)
 - `setup-windows.bat` (for Windows)
 - `night_redeemer.py`
