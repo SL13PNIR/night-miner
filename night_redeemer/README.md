@@ -65,7 +65,7 @@ sudo dnf install python3 python3-pip
 1. Click the green **"Code"** button at the top of this page
 2. Click **"[Download ZIP](https://github.com/SL13PNIR/night-miner/archive/refs/heads/main.zip)"** 
 3. Extract the ZIP file somewhere you'll remember (like your Desktop or Documents)
-
+*Note: This will download all files, including the mining files and old consolidation tool. **We are only interested in the "night_redeemer" folder.***
 ---
 
 ## Step 3: Run Setup
