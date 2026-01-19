@@ -83,7 +83,7 @@ sudo dnf install python3 python3-pip
 
 ## Step 3: Run Setup
 
-Open the extracted folder. You'll see:
+Open the extracted folder/night_redeemer/ You'll see:
 - `setup-linux-mac.sh` (for Linux/Mac)
 - `setup-windows.bat` (for Windows)
 - `night_redeemer.py`
@@ -326,7 +326,7 @@ The NIGHT amounts shown should match what you see at the script address.
 After setup:
 
 ```
-(extracted folder)/             <- Downloaded from GitHub
+(extracted folder)/night_redeemer         <- Downloaded from GitHub
 ├── README.md
 ├── SETUP_FILES.txt
 ├── night_redeemer.py
